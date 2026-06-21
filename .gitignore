@@ -1,0 +1,51 @@
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Internal / working files (LOCAL ONLY, never pushed) ---
+CLAUDE.md
+bugs.md
+MASTER_PLAN.md
+challenges.md
+proofAndValidation.md
+*.internal.md
+.claude/
+.agents/
+skills-lock.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+uv.lock
+
+# --- Vigil runtime artifacts ---
+*.db
+*.sqlite
+*.sqlite3
+vigil.db*
+eval/results.json
+eval/*.png
+eval/*.csv
+
+# --- Node / dashboard / cli ---
+node_modules/
+packages/dashboard/dist/
+packages/dashboard/.vite/
+*.log
+.DS_Store
+
+# --- Models / caches ---
+.cache/
+sentence_transformers/

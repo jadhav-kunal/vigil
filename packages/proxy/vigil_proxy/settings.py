@@ -1,0 +1,96 @@
+"""Typed configuration for Vigil (pydantic-settings).
+
+Every optional integration auto-detects its key here. Absent key => the capability is skipped
+silently downstream (Invariant I2). Env var names are explicit (mixed conventions: OPENAI_*,
+VIGIL_*, TTC_*, etc.), so each field declares its own validation alias.
+"""
+
+from __future__ import annotations
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=False,
+    )
+
+    # --- Core proxy ---
+    host: str = Field(default="0.0.0.0", validation_alias="VIGIL_HOST")
+    port: int = Field(default=8765, validation_alias="VIGIL_PORT")
+    openai_base_url: str = Field(
+        default="https://api.openai.com/v1", validation_alias="OPENAI_BASE_URL"
+    )
+    anthropic_base_url: str = Field(
+        default="https://api.anthropic.com", validation_alias="ANTHROPIC_BASE_URL"
+    )
+    upstream_timeout_s: float = Field(default=120.0, validation_alias="VIGIL_UPSTREAM_TIMEOUT")
+    log_level: str = Field(default="INFO", validation_alias="VIGIL_LOG_LEVEL")
+
+    # --- Store ---
+    db_path: str = Field(default="vigil.db", validation_alias="VIGIL_DB_PATH")
+    redis_url: str | None = Field(default=None, validation_alias="REDIS_URL")
+
+    # --- Watchdog thresholds (spec 4.2) ---
+    window: int = Field(default=5, validation_alias="VIGIL_WINDOW")
+    trip_streak: int = Field(default=3, validation_alias="VIGIL_TRIP_STREAK")
+    theta_sim: float = Field(default=0.85, validation_alias="VIGIL_THETA_SIM")
+    theta_ent: float = Field(default=0.30, validation_alias="VIGIL_THETA_ENT")
+    goal_judge_cadence: int = Field(default=5, validation_alias="VIGIL_GOAL_JUDGE_CADENCE")
+    recovery_steps: int = Field(default=3, validation_alias="VIGIL_RECOVERY_STEPS")
+    session_mode: str = Field(default="normal", validation_alias="VIGIL_SESSION_MODE")
+
+    # --- Optional: goal judge / governor LLM classifier (OpenAI-compatible) ---
+    judge_base_url: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_BASE_URL")
+    judge_api_key: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_API_KEY")
+    judge_model: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_MODEL")
+
+    # --- Optional: compression Layer 2 (Token Company) ---
+    ttc_api_key: str | None = Field(default=None, validation_alias="TTC_API_KEY")
+    ttc_base_url: str | None = Field(default=None, validation_alias="TTC_BASE_URL")
+
+    # --- Optional: semantic cache (Redis LangCache) ---
+    redis_langcache_url: str | None = Field(default=None, validation_alias="REDIS_LANGCACHE_URL")
+    redis_langcache_api_key: str | None = Field(
+        default=None, validation_alias="REDIS_LANGCACHE_API_KEY"
+    )
+    redis_langcache_cache_id: str | None = Field(
+        default=None, validation_alias="REDIS_LANGCACHE_CACHE_ID"
+    )
+
+    # --- Optional: observability (Phoenix default / Arize AX) ---
+    phoenix_collector_endpoint: str | None = Field(
+        default=None, validation_alias="PHOENIX_COLLECTOR_ENDPOINT"
+    )
+    phoenix_api_key: str | None = Field(default=None, validation_alias="PHOENIX_API_KEY")
+    arize_space_id: str | None = Field(default=None, validation_alias="ARIZE_SPACE_ID")
+    arize_api_key: str | None = Field(default=None, validation_alias="ARIZE_API_KEY")
+
+    # --- Optional: Sentry ---
+    sentry_dsn: str | None = Field(default=None, validation_alias="SENTRY_DSN")
+
+    # --- Optional: Orkes webhook ---
+    orkes_webhook_url: str | None = Field(default=None, validation_alias="VIGIL_ORKES_WEBHOOK_URL")
+
+    @property
+    def use_redis(self) -> bool:
+        return bool(self.redis_url)
+
+    @property
+    def judge_enabled(self) -> bool:
+        return bool(self.judge_base_url and self.judge_api_key and self.judge_model)
+
+
+_settings: Settings | None = None
+
+
+def get_settings() -> Settings:
+    """Process-wide singleton so env is read once."""
+    global _settings
+    if _settings is None:
+        _settings = Settings()
+    return _settings

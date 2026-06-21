@@ -1,0 +1,66 @@
+[project]
+name = "vigil-proxy"
+version = "0.1.0"
+description = "Transparent, framework-agnostic LLM proxy with in-flight semantic loop detection and intervention."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "httpx>=0.27",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "aiosqlite>=0.20",
+    "numpy>=1.26",
+    "sentence-transformers>=2.6",
+    "websockets>=12.0",
+]
+
+[project.optional-dependencies]
+redis = ["redis>=5.0", "redisvl>=0.3"]
+sentry = ["sentry-sdk>=2.0"]
+tracing = [
+    "openinference-instrumentation>=0.1",
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp>=1.24",
+]
+dev = [
+    "ruff>=0.4",
+    "black>=24.0",
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["packages/proxy/vigil_proxy"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["packages/proxy", "eval"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+check_untyped_defs = true
+files = ["packages/proxy/vigil_proxy", "eval"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["packages/proxy/tests", "eval/tests"]
+pythonpath = ["packages/proxy"]
