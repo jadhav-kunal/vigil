@@ -252,6 +252,46 @@ def test_layer2_compression_runs_on_the_request_path_when_enabled():
             app.state.l2 = None  # don't leak into other tests
 
 
+def test_semantic_cache_hit_serves_without_upstream_and_costs_zero():
+    """Slice 11: a semantic-cache hit serves the cached response, never calls upstream, and the
+    recorded step is marked served_from_cache with zero billed tokens (a hit is ~free)."""
+    cached_response = {
+        "choices": [{"message": {"content": "cached answer"}}],
+        "usage": {"prompt_tokens": 99, "completion_tokens": 99},
+    }
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": "LIVE"}}]})
+
+    class FakeCache:
+        async def search(self, prompt, attributes):
+            return cached_response  # always a hit
+
+        async def store(self, prompt, response, attributes):
+            raise AssertionError("must not store on a hit")
+
+    with TestClient(app) as client:
+        app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.cache = FakeCache()
+        try:
+            r = client.post(
+                "/v1/chat/completions",
+                headers={"authorization": "Bearer k", "x-vigil-session-id": "cache1"},
+                json={"model": "gpt-4o", "messages": [{"role": "user", "content": "are we done?"}]},
+            )
+            assert r.json()["choices"][0]["message"]["content"] == "cached answer"
+            assert calls["n"] == 0  # upstream was never called on a cache hit
+            m = _wait_metrics(client, "cache1")
+            assert m["steps"] == 1
+            assert m["cost_usd"] == 0  # a hit is ~free: tokens zeroed
+            agg = client.get("/metrics/aggregate").json()
+            assert agg["cache_hits"] >= 1
+        finally:
+            app.state.cache = None
+
+
 def test_replay_endpoint_reconstructs_session_with_zero_upstream_calls():
     """Slice 8: after a live request is captured, /replay rebuilds the trajectory purely from the
     forensic cache — and crucially never touches upstream (the transport raises if called)."""

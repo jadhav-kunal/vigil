@@ -101,6 +101,9 @@ class Settings(BaseSettings):
     redis_langcache_cache_id: str | None = Field(
         default=None, validation_alias="REDIS_LANGCACHE_CACHE_ID"
     )
+    redis_langcache_min_similarity: float = Field(
+        default=0.9, validation_alias="REDIS_LANGCACHE_MIN_SIMILARITY"
+    )
 
     # --- Optional: observability (Phoenix default / Arize AX) ---
     phoenix_collector_endpoint: str | None = Field(
@@ -124,6 +127,14 @@ class Settings(BaseSettings):
     @property
     def use_redis(self) -> bool:
         return bool(self.redis_url)
+
+    @property
+    def langcache_enabled(self) -> bool:
+        return bool(
+            self.redis_langcache_url
+            and self.redis_langcache_api_key
+            and self.redis_langcache_cache_id
+        )
 
     @property
     def tracing_enabled(self) -> bool:

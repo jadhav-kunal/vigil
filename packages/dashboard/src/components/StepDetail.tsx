@@ -45,13 +45,23 @@ export function StepDetail({ step, onClose }: { step: Step | null; onClose: () =
         <span className="mono text-[13px]" style={{ color: "var(--text)" }}>
           step {step.step_index}
         </span>
-        <button
-          onClick={onClose}
-          className="mono text-[11px] px-2 py-0.5 rounded"
-          style={{ color: "var(--text-dim)", border: "1px solid var(--border)" }}
-        >
-          close
-        </button>
+        <div className="flex items-center gap-2">
+          {step.served_from_cache && (
+            <span
+              className="mono text-[10px] uppercase px-1.5 py-0.5 rounded"
+              style={{ letterSpacing: "0.06em", color: "var(--ok)", border: "1px solid var(--ok)" }}
+            >
+              cached
+            </span>
+          )}
+          <button
+            onClick={onClose}
+            className="mono text-[11px] px-2 py-0.5 rounded"
+            style={{ color: "var(--text-dim)", border: "1px solid var(--border)" }}
+          >
+            close
+          </button>
+        </div>
       </div>
 
       <Field label="model used">

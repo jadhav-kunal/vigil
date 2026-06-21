@@ -42,6 +42,8 @@ class Step(BaseModel):
     # Populated by later slices; carried here so the schema is stable.
     breaker_override: bool = False
     breaker_state: str | None = None
+    # M4 semantic cache (slice 11): this turn was served from the cache, no upstream call.
+    served_from_cache: bool = False
 
     # The text used by the watchdog to embed this step (spec 4.2):
     #   tool_name + " " + json(tool_args) + " " + assistant_text

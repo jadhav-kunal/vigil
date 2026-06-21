@@ -46,6 +46,7 @@ _STEP_COLUMNS = [
     ("watchdog_tripped", "INTEGER DEFAULT 0"),
     ("breaker_override", "INTEGER DEFAULT 0"),
     ("breaker_state", "TEXT"),
+    ("served_from_cache", "INTEGER DEFAULT 0"),
 ]
 
 
@@ -245,7 +246,8 @@ class SQLiteStore(Store):
             "SELECT COUNT(DISTINCT session_id) AS sessions, COUNT(*) AS steps, "
             "COALESCE(SUM(prompt_tokens),0) AS ptok, COALESCE(SUM(completion_tokens),0) AS ctok, "
             "COALESCE(SUM(tokens_before_compression),0) AS before, "
-            "COALESCE(SUM(tokens_after_compression),0) AS after FROM steps;"
+            "COALESCE(SUM(tokens_after_compression),0) AS after, "
+            "COALESCE(SUM(served_from_cache),0) AS cache_hits FROM steps;"
         )
         totals = await cur.fetchone()
         cur = await self._db.execute(
@@ -266,6 +268,7 @@ class SQLiteStore(Store):
             "completion_tokens": int(totals["ctok"] or 0),
             "tokens_before_compression": int(totals["before"] or 0),
             "tokens_after_compression": int(totals["after"] or 0),
+            "cache_hits": int(totals["cache_hits"] or 0),
             "breaker_open_sessions": int(open_row["n"] or 0),
             "by_model": {
                 r["model_used"]: {
@@ -408,6 +411,7 @@ def _step_values(step: Step) -> dict[str, object]:
         "watchdog_tripped": int(step.watchdog_tripped),
         "breaker_override": int(step.breaker_override),
         "breaker_state": step.breaker_state,
+        "served_from_cache": int(step.served_from_cache),
     }
 
 
@@ -436,6 +440,7 @@ def _row_to_step(row: Any) -> Step:
         watchdog_tripped=bool(row["watchdog_tripped"]),
         breaker_override=bool(row["breaker_override"]),
         breaker_state=row["breaker_state"],
+        served_from_cache=bool(row["served_from_cache"]),
     )
 
 

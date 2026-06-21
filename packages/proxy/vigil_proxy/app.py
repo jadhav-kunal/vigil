@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
 from .analyzer import Analyzer, make_analyzer
-from .breaker import is_mitigating, is_open
+from .breaker import CLOSED, is_mitigating, is_open
 from .breaker_manager import BreakerManager, make_breaker
 from .compressor import compress_messages
 from .embedder import make_embedder
@@ -30,6 +30,7 @@ from .forensics import Forensics
 from .governor import Governor, make_governor
 from .hub import Broadcaster, step_event
 from .integrations.compression_l2 import TokenCompressor, make_l2_compressor
+from .integrations.semantic_cache import LangCacheClient, make_semantic_cache
 from .integrations.tracing import Tracer, make_tracer
 from .judge import make_judge
 from .logging_config import get_logger, log_event, set_level
@@ -82,6 +83,10 @@ class CaptureCtx:
     original_request: dict | None = None
     l2: TokenCompressor | None = None
     tracer: Tracer | None = None
+    cache: LangCacheClient | None = None
+    # The canonical prompt key for the semantic cache, and whether this turn was a cache hit.
+    cache_prompt: str | None = None
+    served_from_cache: bool = False
 
 
 @asynccontextmanager
@@ -97,6 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.forensics = Forensics(app.state.store, app.state.price_table)
     app.state.l2 = make_l2_compressor(settings)
     app.state.tracer = make_tracer(settings)
+    app.state.cache = make_semantic_cache(settings)
     app.state.breaker = make_breaker(
         settings,
         app.state.store,
@@ -177,6 +183,7 @@ async def metrics_aggregate(request: Request) -> dict:
         "tokens_before_compression": before,
         "tokens_after_compression": after,
         "tokens_saved": max(0, before - after),
+        "cache_hits": agg["cache_hits"],
         "breaker_open_sessions": agg["breaker_open_sessions"],
         "models_used": sorted(agg["by_model"].keys()),
         "model_step_counts": {m: v["steps"] for m, v in agg["by_model"].items()},
@@ -345,6 +352,22 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return {k: v for k, v in request.headers.items() if k.lower() not in _DROP_REQUEST_HEADERS}
 
 
+def _cache_prompt(messages: list[dict]) -> str:
+    """The semantic-cache key: the most recent message text (the query the step answers)."""
+    for m in reversed(messages):
+        if isinstance(m, dict):
+            content = m.get("content")
+            if isinstance(content, str) and content:
+                return content
+            if isinstance(content, list):
+                text = " ".join(
+                    str(b.get("text", "")) for b in content if isinstance(b, dict)
+                ).strip()
+                if text:
+                    return text
+    return ""
+
+
 def _extract_goal(messages: list[dict]) -> str:
     """The original task = the first user message; used by the goal-judge."""
     for m in messages:
@@ -473,6 +496,7 @@ async def _proxy(request: Request, *, provider: str) -> Response:
         breaker=breaker,
         l2=request.app.state.l2,
         tracer=request.app.state.tracer,
+        cache=request.app.state.cache,
     )
 
     body = await request.body()
@@ -523,6 +547,19 @@ async def _proxy(request: Request, *, provider: str) -> Response:
             },
             status_code=503,
         )
+
+    # Semantic cache (M4): a hit serves the cached response and skips upstream entirely. Only when
+    # CLOSED (don't bypass the breaker's mitigation) and non-streaming. The lookup is paid overhead
+    # on every request; the eval reports the break-even hit rate.
+    if ctx.cache is not None and not req.stream and snap.state == CLOSED:
+        ctx.cache_prompt = _cache_prompt(req.messages)
+        cached = await ctx.cache.search(ctx.cache_prompt, {"model": req.model})
+        if cached is not None:
+            ctx.served_from_cache = True
+            _schedule_capture(ctx, req, cached, session_id, mutation_override)
+            log_event(logger, 20, "semcache.hit", session=session_id)
+            return JSONResponse(cached)
+
     rewritten = False
     if is_mitigating(snap.state):
         # Breaker mitigation owns the model while HALF_OPEN; the governor stays out of its way.
@@ -624,6 +661,12 @@ async def _capture(ctx: CaptureCtx, req, resp_json, session_id, mutation_overrid
             tokens_before_compression=ctx.tokens_before,
             tokens_after_compression=ctx.tokens_after,
         )
+        if ctx.served_from_cache:
+            # A cache hit made no upstream call, so it costs ~0 — zero the billed tokens but keep
+            # the assistant text so the watchdog still sees the (cached) turn.
+            step.served_from_cache = True
+            step.prompt_tokens = 0
+            step.completion_tokens = 0
         # Watchdog runs in the background task and embeds in a worker thread (Invariant I1).
         result = await ctx.analyzer.analyze(step)
         step.sim_score = result.sim_score
@@ -648,6 +691,9 @@ async def _capture(ctx: CaptureCtx, req, resp_json, session_id, mutation_overrid
             await ctx.forensics.record(
                 session_id, step.step_index, ctx.original_request, resp_json, step.model_used
             )
+        if ctx.cache is not None and ctx.cache_prompt is not None and not ctx.served_from_cache:
+            # Populate the semantic cache on a miss (off the response path — never adds latency).
+            await ctx.cache.store(ctx.cache_prompt, resp_json, {"model": req.model})
         log_event(
             logger,
             20,

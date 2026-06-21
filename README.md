@@ -147,6 +147,7 @@ commented list). The defaults boot a fully working local proxy. The notable togg
 | `VIGIL_COMPRESS_ENABLED` | `true` | Layer-1 loop-aware context compression (free, structural) |
 | `VIGIL_GOVERNOR_ENABLED` | `false` | Per-step model routing to the cheapest adequate model |
 | `VIGIL_FORENSICS_ENABLED` | `true` | Cache exchanges for replay/fork |
+| `REDIS_LANGCACHE_*` | unset | Semantic cache (M4): serve repeats from cache, skip upstream |
 | `VIGIL_EMBED_HASHING` | `false` | Use the offline hashing embedder (skip the ML model download) |
 | `VIGIL_WINDOW` / `VIGIL_TRIP_STREAK` / `VIGIL_THETA_SIM` / `VIGIL_THETA_ENT` | `5 / 3 / 0.85 / 0.30` | Watchdog detection thresholds |
 | `VIGIL_JUDGE_*` | unset | Optional LLM goal-judge (degrades to cosine+entropy if absent) |

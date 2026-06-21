@@ -22,6 +22,7 @@ export interface Step {
   watchdog_tripped: boolean;
   breaker_override: boolean;
   breaker_state: string | null;
+  served_from_cache: boolean;
   // Added by the server on the wire:
   cost_usd: number;
   input_rate_per_1k: number;
