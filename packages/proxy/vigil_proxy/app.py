@@ -29,6 +29,8 @@ from .embedder import make_embedder
 from .forensics import Forensics
 from .governor import Governor, make_governor
 from .hub import Broadcaster, step_event
+from .integrations.compression_l2 import TokenCompressor, make_l2_compressor
+from .integrations.tracing import Tracer, make_tracer
 from .judge import make_judge
 from .logging_config import get_logger, log_event, set_level
 from .normalize import (
@@ -78,6 +80,8 @@ class CaptureCtx:
     forensics: Forensics | None = None
     # The original (pre-compression/route) request body, cached for forensic replay/fork.
     original_request: dict | None = None
+    l2: TokenCompressor | None = None
+    tracer: Tracer | None = None
 
 
 @asynccontextmanager
@@ -91,6 +95,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.analyzer = make_analyzer(settings, make_embedder(settings))
     app.state.governor = make_governor(settings, app.state.price_table)
     app.state.forensics = Forensics(app.state.store, app.state.price_table)
+    app.state.l2 = make_l2_compressor(settings)
+    app.state.tracer = make_tracer(settings)
     app.state.breaker = make_breaker(
         settings,
         app.state.store,
@@ -367,35 +373,50 @@ def _route_request(
     return parsed, True
 
 
-def _compress_request(parsed: dict, ctx: CaptureCtx, settings: Settings, session_id: str) -> bool:
-    """Layer 1 compression (spec 4.5) on the request path. Records before/after token estimates
-    (the same-estimator savings proof) on ctx, and returns True if the body was rewritten."""
+async def _compress_request(
+    parsed: dict, ctx: CaptureCtx, settings: Settings, session_id: str
+) -> bool:
+    """Compression on the request path: Layer 1 (free, structural) then optional Layer 2 (Token
+    Company, env-gated). Records before/after token estimates (the same-estimator savings proof)
+    on ctx and returns True if the body was rewritten."""
     messages = parsed.get("messages")
-    if not settings.compress_enabled or not isinstance(messages, list):
+    if not isinstance(messages, list) or (not settings.compress_enabled and ctx.l2 is None):
         return False
     ctx.tokens_before = estimate_messages_tokens(messages)
-    compressed, stats = compress_messages(
-        messages,
-        min_tool_bytes=settings.compress_min_tool_bytes,
-        floor_messages=settings.compress_floor_messages,
-        dedup_min_run=settings.compress_dedup_min_run,
-    )
-    ctx.tokens_after = estimate_messages_tokens(compressed)
-    if not stats.changed:
-        return False
-    parsed["messages"] = compressed
-    log_event(
-        logger,
-        20,
-        "compress.layer1",
-        session=session_id,
-        collapsed_runs=stats.collapsed_runs,
-        dropped_messages=stats.dropped_messages,
-        truncated_outputs=stats.truncated_outputs,
-        tokens_before=ctx.tokens_before,
-        tokens_after=ctx.tokens_after,
-    )
-    return True
+    working = messages
+    changed = False
+
+    if settings.compress_enabled:
+        compressed, stats = compress_messages(
+            working,
+            min_tool_bytes=settings.compress_min_tool_bytes,
+            floor_messages=settings.compress_floor_messages,
+            dedup_min_run=settings.compress_dedup_min_run,
+        )
+        if stats.changed:
+            working = compressed
+            changed = True
+            log_event(
+                logger,
+                20,
+                "compress.layer1",
+                session=session_id,
+                collapsed_runs=stats.collapsed_runs,
+                dropped_messages=stats.dropped_messages,
+                truncated_outputs=stats.truncated_outputs,
+            )
+
+    if ctx.l2 is not None:
+        l2_out, l2_changed = await ctx.l2.compress(working)
+        if l2_changed:
+            working = l2_out
+            changed = True
+            log_event(logger, 20, "compress.layer2", session=session_id)
+
+    ctx.tokens_after = estimate_messages_tokens(working)
+    if changed:
+        parsed["messages"] = working
+    return changed
 
 
 def _tool_is_mutating(tool: dict) -> bool:
@@ -423,6 +444,8 @@ async def _proxy(request: Request, *, provider: str) -> Response:
         price_table=request.app.state.price_table,
         analyzer=request.app.state.analyzer,
         breaker=breaker,
+        l2=request.app.state.l2,
+        tracer=request.app.state.tracer,
     )
 
     body = await request.body()
@@ -485,7 +508,7 @@ async def _proxy(request: Request, *, provider: str) -> Response:
         )
         rewritten = routed or rewritten
 
-    rewritten = _compress_request(parsed, ctx, settings, session_id) or rewritten
+    rewritten = await _compress_request(parsed, ctx, settings, session_id) or rewritten
     if rewritten:
         body = json.dumps(parsed).encode()
 
@@ -591,6 +614,8 @@ async def _capture(ctx: CaptureCtx, req, resp_json, session_id, mutation_overrid
             step.session_id, step.step_index, step.breaker_state, step.breaker_override
         )
         await ctx.broadcaster.broadcast(step_event(step, ctx.price_table))
+        if ctx.tracer is not None:
+            ctx.tracer.record_step(step)
         if ctx.forensics is not None and ctx.original_request is not None:
             # Cache the original request -> observed response for forensic replay/fork (spec 4.7).
             await ctx.forensics.record(

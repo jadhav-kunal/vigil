@@ -223,6 +223,35 @@ def test_governor_routes_extraction_to_cheaper_model_on_the_wire():
             app.state.settings.governor_enabled = False  # don't leak the toggle to other tests
 
 
+def test_layer2_compression_runs_on_the_request_path_when_enabled():
+    """Slice 9: a configured Layer-2 compressor (Token Company) runs after Layer 1 on the request
+    path and shrinks the forwarded body. Here a fake L2 stands in for the paid API."""
+    forwarded: dict = {}
+    upstream = {"choices": [{"message": {"content": "ok"}}], "usage": {"prompt_tokens": 5}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forwarded["body"] = json.loads(request.content)
+        return httpx.Response(200, json=upstream)
+
+    class FakeL2:
+        async def compress(self, messages):
+            return messages[:-1], True  # drop one message to prove L2 ran
+
+    with TestClient(app) as client:
+        app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.l2 = FakeL2()
+        try:
+            msgs = [{"role": "user", "content": f"m{i}"} for i in range(3)]
+            client.post(
+                "/v1/chat/completions",
+                headers={"authorization": "Bearer k", "x-vigil-session-id": "l2"},
+                json={"model": "gpt-4o", "messages": msgs},
+            )
+            assert len(forwarded["body"]["messages"]) == 2  # L2 dropped one before forwarding
+        finally:
+            app.state.l2 = None  # don't leak into other tests
+
+
 def test_replay_endpoint_reconstructs_session_with_zero_upstream_calls():
     """Slice 8: after a live request is captured, /replay rebuilds the trajectory purely from the
     forensic cache — and crucially never touches upstream (the transport raises if called)."""

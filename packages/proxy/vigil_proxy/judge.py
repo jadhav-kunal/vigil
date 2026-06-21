@@ -9,6 +9,7 @@ cosine+entropy+state alone (Invariant I2).
 from __future__ import annotations
 
 import re
+from typing import Protocol
 
 import httpx
 
@@ -20,6 +21,13 @@ logger = get_logger("judge")
 
 LOW_SCORE = 0.4
 
+
+class Judge(Protocol):
+    """Anything that scores goal-progress in [0, 1] (or None on failure)."""
+
+    async def score(self, goal: str, recent: list[Step]) -> float | None: ...
+
+
 _PROMPT = (
     "You are monitoring an AI agent for progress. Given the agent's ORIGINAL GOAL and its most "
     "recent steps, rate how much real progress it is making toward completing the goal, from 0.0 "
@@ -28,7 +36,14 @@ _PROMPT = (
 )
 
 
+def _user_prompt(goal: str, recent: list[Step]) -> str:
+    steps_text = "\n".join(f"- {s.tool_name or 'reply'}: {s.assistant_text[:200]}" for s in recent)
+    return f"ORIGINAL GOAL:\n{goal}\n\nRECENT STEPS:\n{steps_text}"
+
+
 class GoalJudge:
+    """OpenAI-compatible judge (works against any OpenAI-shaped /chat/completions endpoint)."""
+
     def __init__(
         self,
         *,
@@ -44,10 +59,7 @@ class GoalJudge:
 
     async def score(self, goal: str, recent: list[Step]) -> float | None:
         """Return a progress score in [0, 1], or None if the judge call failed."""
-        steps_text = "\n".join(
-            f"- {s.tool_name or 'reply'}: {s.assistant_text[:200]}" for s in recent
-        )
-        user = f"ORIGINAL GOAL:\n{goal}\n\nRECENT STEPS:\n{steps_text}"
+        user = _user_prompt(goal, recent)
         payload = {
             "model": self._model,
             "messages": [
@@ -76,6 +88,54 @@ class GoalJudge:
                 await client.aclose()
 
 
+class AnthropicGoalJudge:
+    """Claude judge over the Anthropic Messages API (spec 4.9 sponsor option). Same `score`
+    contract as GoalJudge; selected with VIGIL_JUDGE_PROVIDER=anthropic."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._model = model
+        self._client = client
+
+    async def score(self, goal: str, recent: list[Step]) -> float | None:
+        payload = {
+            "model": self._model,
+            "max_tokens": 8,
+            "system": _PROMPT,
+            "messages": [{"role": "user", "content": _user_prompt(goal, recent)}],
+        }
+        owns_client = self._client is None
+        client = self._client or httpx.AsyncClient(timeout=20.0)
+        try:
+            resp = await client.post(
+                f"{self._base_url}/v1/messages",
+                headers={
+                    "x-api-key": self._api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=payload,
+            )
+            resp.raise_for_status()
+            blocks = resp.json().get("content") or []
+            text = next((b.get("text", "") for b in blocks if b.get("type") == "text"), "")
+            return _parse_score(text)
+        except Exception as exc:  # best-effort; never break the proxy
+            log_event(logger, 30, "judge.error", error=str(exc))
+            return None
+        finally:
+            if owns_client:
+                await client.aclose()
+
+
 def _parse_score(text: str) -> float | None:
     m = re.search(r"[01](?:\.\d+)?|\.\d+", text.strip())
     if not m:
@@ -86,11 +146,19 @@ def _parse_score(text: str) -> float | None:
         return None
 
 
-def make_judge(settings: Settings) -> GoalJudge | None:
+def make_judge(settings: Settings) -> Judge | None:
     if not settings.judge_enabled:
         return None
     assert settings.judge_base_url and settings.judge_api_key and settings.judge_model
-    log_event(logger, 20, "judge.enabled", model=settings.judge_model)
+    log_event(
+        logger, 20, "judge.enabled", provider=settings.judge_provider, model=settings.judge_model
+    )
+    if settings.judge_provider.lower() == "anthropic":
+        return AnthropicGoalJudge(
+            base_url=settings.judge_base_url,
+            api_key=settings.judge_api_key,
+            model=settings.judge_model,
+        )
     return GoalJudge(
         base_url=settings.judge_base_url,
         api_key=settings.judge_api_key,

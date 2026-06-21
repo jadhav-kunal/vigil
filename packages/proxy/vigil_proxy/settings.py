@@ -62,7 +62,9 @@ class Settings(BaseSettings):
     # Force the deterministic hashing embedder (offline / tests); skips the ML model entirely.
     embed_hashing: bool = Field(default=False, validation_alias="VIGIL_EMBED_HASHING")
 
-    # --- Optional: goal judge / governor LLM classifier (OpenAI-compatible) ---
+    # --- Optional: goal judge / governor LLM classifier ---
+    # provider = "openai" (any OpenAI-compatible endpoint) or "anthropic" (Claude /v1/messages).
+    judge_provider: str = Field(default="openai", validation_alias="VIGIL_JUDGE_PROVIDER")
     judge_base_url: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_BASE_URL")
     judge_api_key: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_API_KEY")
     judge_model: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_MODEL")
@@ -114,9 +116,19 @@ class Settings(BaseSettings):
     # --- Optional: Orkes webhook ---
     orkes_webhook_url: str | None = Field(default=None, validation_alias="VIGIL_ORKES_WEBHOOK_URL")
 
+    # --- Tracing service name (OpenInference/OTel; exporter chosen by the Phoenix/Arize vars) ---
+    tracing_service_name: str = Field(
+        default="vigil-proxy", validation_alias="VIGIL_TRACING_SERVICE_NAME"
+    )
+
     @property
     def use_redis(self) -> bool:
         return bool(self.redis_url)
+
+    @property
+    def tracing_enabled(self) -> bool:
+        """Tracing is on when a Phoenix collector or an Arize space is configured."""
+        return bool(self.phoenix_collector_endpoint or (self.arize_space_id and self.arize_api_key))
 
     @property
     def judge_enabled(self) -> bool:

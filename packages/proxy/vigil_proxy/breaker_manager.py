@@ -16,7 +16,7 @@ import httpx
 
 from .breaker import OPEN, BreakerSnapshot, transition
 from .hub import Broadcaster
-from .judge import LOW_SCORE, GoalJudge
+from .judge import LOW_SCORE, Judge
 from .logging_config import get_logger, log_event
 from .models import Step
 from .pricing import PriceTable, estimate_cost
@@ -33,8 +33,9 @@ class BreakerManager:
         broadcaster: Broadcaster,
         price_table: PriceTable,
         settings: Settings,
-        judge: GoalJudge | None = None,
+        judge: Judge | None = None,
         analyzer=None,
+        sentry=None,
     ) -> None:
         self._store = store
         self._broadcaster = broadcaster
@@ -42,6 +43,7 @@ class BreakerManager:
         self._settings = settings
         self._judge = judge
         self._analyzer = analyzer
+        self._sentry = sentry
         self._cache: dict[str, BreakerSnapshot] = {}
         self._goals: dict[str, str] = {}
         self._override_pending: set[str] = set()
@@ -201,6 +203,8 @@ class BreakerManager:
             saved_estimate_usd=saved,
         )
         await self._fire_webhook(snap, step)
+        if self._sentry is not None:
+            self._sentry.capture_breaker_open(step.session_id, snap.post_mortem)
 
     async def _fire_webhook(self, snap: BreakerSnapshot, step: Step) -> None:
         url = self._settings.orkes_webhook_url
@@ -233,6 +237,8 @@ class BreakerManager:
 
 
 def make_breaker(settings, store, broadcaster, price_table, judge, analyzer) -> BreakerManager:
+    from .integrations.sentry_sink import make_sentry
+
     return BreakerManager(
         store=store,
         broadcaster=broadcaster,
@@ -240,4 +246,5 @@ def make_breaker(settings, store, broadcaster, price_table, judge, analyzer) -> 
         settings=settings,
         judge=judge,
         analyzer=analyzer,
+        sentry=make_sentry(settings),
     )
