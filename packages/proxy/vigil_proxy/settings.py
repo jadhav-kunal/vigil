@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     judge_api_key: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_API_KEY")
     judge_model: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_MODEL")
 
+    # --- Forensics (spec 4.7): content-addressed exchange cache for replay/fork ---
+    forensics_enabled: bool = Field(default=True, validation_alias="VIGIL_FORENSICS_ENABLED")
+
     # --- Effort governor (spec 4.6): opt-in per-step model routing ---
     governor_enabled: bool = Field(default=False, validation_alias="VIGIL_GOVERNOR_ENABLED")
     # Optional JSON override of the provider -> tier -> model routing map.

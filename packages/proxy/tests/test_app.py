@@ -223,6 +223,50 @@ def test_governor_routes_extraction_to_cheaper_model_on_the_wire():
             app.state.settings.governor_enabled = False  # don't leak the toggle to other tests
 
 
+def test_replay_endpoint_reconstructs_session_with_zero_upstream_calls():
+    """Slice 8: after a live request is captured, /replay rebuilds the trajectory purely from the
+    forensic cache — and crucially never touches upstream (the transport raises if called)."""
+    upstream = {
+        "choices": [{"message": {"content": "answer"}}],
+        "usage": {"prompt_tokens": 30, "completion_tokens": 5},
+    }
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json=upstream)
+
+    with TestClient(app) as client:
+        app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client.post(
+            "/v1/chat/completions",
+            headers={"authorization": "Bearer k", "x-vigil-session-id": "rep1"},
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "q"}]},
+        )
+        _wait_metrics(client, "rep1")  # let the background capture cache the exchange
+        calls_before_replay = calls["n"]
+
+        # Poll replay until the exchange is recorded (recorded just after the step is persisted).
+        for _ in range(200):
+            r = client.post("/sessions/rep1/replay")
+            if r.status_code == 200 and r.json()["steps"]:
+                break
+            time.sleep(0.01)
+        body = r.json()
+        assert r.status_code == 200
+        assert body["upstream_calls"] == 0
+        assert calls["n"] == calls_before_replay  # replay made NO new upstream calls
+        assert len(body["steps"]) == 1
+        assert body["steps"][0]["assistant_text"] == "answer"
+        assert isinstance(body["trace_hash"], str) and len(body["trace_hash"]) == 64
+
+
+def test_replay_unknown_session_is_404():
+    with TestClient(app) as client:
+        r = client.post("/sessions/does-not-exist/replay")
+        assert r.status_code == 404
+
+
 def test_override_endpoint_resets_breaker():
     with TestClient(app) as client:
         r = client.post("/sessions/any-session/override")

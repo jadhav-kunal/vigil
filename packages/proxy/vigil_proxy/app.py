@@ -26,6 +26,7 @@ from .breaker import is_mitigating, is_open
 from .breaker_manager import BreakerManager, make_breaker
 from .compressor import compress_messages
 from .embedder import make_embedder
+from .forensics import Forensics
 from .governor import Governor, make_governor
 from .hub import Broadcaster, step_event
 from .judge import make_judge
@@ -74,6 +75,9 @@ class CaptureCtx:
     # Same-estimator measurement of the message array before/after Layer 1 compression.
     tokens_before: int | None = None
     tokens_after: int | None = None
+    forensics: Forensics | None = None
+    # The original (pre-compression/route) request body, cached for forensic replay/fork.
+    original_request: dict | None = None
 
 
 @asynccontextmanager
@@ -86,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.price_table = load_price_table(settings)
     app.state.analyzer = make_analyzer(settings, make_embedder(settings))
     app.state.governor = make_governor(settings, app.state.price_table)
+    app.state.forensics = Forensics(app.state.store, app.state.price_table)
     app.state.breaker = make_breaker(
         settings,
         app.state.store,
@@ -165,6 +170,79 @@ async def breaker_status(session_id: str, request: Request) -> dict:
         "saved_estimate_usd": snap.saved_estimate_usd,
         "post_mortem": snap.post_mortem,
     }
+
+
+@app.post("/sessions/{session_id}/replay")
+async def session_replay(session_id: str, request: Request) -> Response:
+    """Cached-trace replay (spec 4.7): reconstruct the session entirely from the forensic cache.
+    Zero new API calls, zero side effects — deterministic, so it returns a stable trace hash."""
+    forensics: Forensics = request.app.state.forensics
+    result = await forensics.replay(session_id)
+    if result is None:
+        return JSONResponse(
+            {"error": "no cached exchanges for this session", "session_id": session_id},
+            status_code=404,
+        )
+    log_event(logger, 20, "forensics.replay", session=session_id, steps=len(result.steps))
+    return JSONResponse(result.as_dict())
+
+
+@app.post("/sessions/{session_id}/fork")
+async def session_fork(session_id: str, request: Request) -> Response:
+    """Fork at step N with a different model (spec 4.7). Replays the recorded context up to N and
+    re-issues that one request with the swapped model; tool outputs are held constant (cached), so
+    the diff isolates a model-reasoning change. This is the one forensic op that calls upstream
+    (once) — the caller supplies their own Authorization, exactly like a normal request."""
+    forensics: Forensics = request.app.state.forensics
+    settings: Settings = request.app.state.settings
+    http: httpx.AsyncClient = request.app.state.http
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, ValueError):
+        body = {}
+    step_index = body.get("step_index")
+    new_model = body.get("model")
+    if not isinstance(step_index, int) or not isinstance(new_model, str) or not new_model:
+        return JSONResponse(
+            {"error": "fork requires integer 'step_index' and string 'model'"}, status_code=400
+        )
+    headers = _forward_headers(request)
+
+    async def generate(forked_request: dict) -> dict:
+        model = str(forked_request.get("model", "")).lower()
+        if "claude" in model:
+            base = settings.anthropic_base_url.rstrip("/")
+            fork_url = f"{base}/v1/messages"
+        else:
+            base = settings.openai_base_url.rstrip("/")
+            fork_url = f"{base}/chat/completions"
+        resp = await http.post(fork_url, headers=headers, json=forked_request)
+        resp.raise_for_status()
+        return resp.json()
+
+    try:
+        result = await forensics.fork(session_id, step_index, new_model, generate)
+    except httpx.HTTPError as exc:
+        return JSONResponse({"error": f"fork upstream call failed: {exc}"}, status_code=502)
+    if result is None:
+        return JSONResponse(
+            {
+                "error": "no cached exchange at that step",
+                "session_id": session_id,
+                "step": step_index,
+            },
+            status_code=404,
+        )
+    log_event(
+        logger,
+        20,
+        "forensics.fork",
+        session=session_id,
+        step=step_index,
+        to=new_model,
+        diverged=not (result.same_tool and result.same_args),
+    )
+    return JSONResponse(result.as_dict())
 
 
 @app.websocket("/ws")
@@ -367,6 +445,17 @@ async def _proxy(request: Request, *, provider: str) -> Response:
     headers = _forward_headers(request)
     breaker.remember_goal(session_id, _extract_goal(req.messages))
 
+    if settings.forensics_enabled:
+        ctx.forensics = request.app.state.forensics
+        # Snapshot the ORIGINAL request (before any mitigation/route/compression rewrite) for
+        # faithful replay; the message list is never mutated downstream (compression is copy-on-
+        # write), so holding its reference is safe. No headers here => no provider key is cached.
+        ctx.original_request = {
+            "model": parsed.get("model"),
+            "messages": parsed.get("messages"),
+            "tools": parsed.get("tools"),
+        }
+
     # Breaker gate (reads in-memory state; intervention took effect on a prior step).
     await breaker.ensure_loaded(session_id)  # survive restarts: rehydrate an OPEN breaker
     snap = breaker.get(session_id)
@@ -502,6 +591,11 @@ async def _capture(ctx: CaptureCtx, req, resp_json, session_id, mutation_overrid
             step.session_id, step.step_index, step.breaker_state, step.breaker_override
         )
         await ctx.broadcaster.broadcast(step_event(step, ctx.price_table))
+        if ctx.forensics is not None and ctx.original_request is not None:
+            # Cache the original request -> observed response for forensic replay/fork (spec 4.7).
+            await ctx.forensics.record(
+                session_id, step.step_index, ctx.original_request, resp_json, step.model_used
+            )
         log_event(
             logger,
             20,

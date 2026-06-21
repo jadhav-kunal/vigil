@@ -85,6 +85,23 @@ class Store(abc.ABC):
     async def set_breaker(self, session_id: str, data: dict) -> None: ...
 
     @abc.abstractmethod
+    async def cache_exchange(
+        self,
+        session_id: str,
+        step_index: int,
+        request_hash: str,
+        request: dict,
+        response: dict,
+        model: str | None,
+    ) -> None: ...
+
+    @abc.abstractmethod
+    async def get_exchanges(self, session_id: str) -> list[dict]: ...
+
+    @abc.abstractmethod
+    async def get_cached_response(self, request_hash: str) -> dict | None: ...
+
+    @abc.abstractmethod
     async def close(self) -> None: ...
 
 
@@ -112,6 +129,22 @@ class SQLiteStore(Store):
         await self._db.execute(
             "CREATE TABLE IF NOT EXISTS breaker_states ("
             "session_id TEXT PRIMARY KEY, data TEXT, updated_at TEXT);"
+        )
+        # Forensic cache (spec 4.7): the (request -> response) exchange per step, content-addressed
+        # by request_hash for cached-trace replay. request_json is the request BODY only (never a
+        # provider key — keys live in headers, which we never store).
+        await self._db.execute(
+            "CREATE TABLE IF NOT EXISTS exchanges ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, "
+            "step_index INTEGER NOT NULL, request_hash TEXT NOT NULL, request_json TEXT NOT NULL, "
+            "response_json TEXT NOT NULL, model TEXT, created_at TEXT);"
+        )
+        await self._db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_exchanges_session "
+            "ON exchanges(session_id, step_index);"
+        )
+        await self._db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exchanges_hash ON exchanges(request_hash);"
         )
         await self._db.commit()
         log_event(logger, 20, "store.init", backend="sqlite", path=self._db_path)
@@ -233,6 +266,69 @@ class SQLiteStore(Store):
             (session_id, json.dumps(data), datetime.now(UTC).isoformat()),
         )
         await self._db.commit()
+
+    async def cache_exchange(
+        self,
+        session_id: str,
+        step_index: int,
+        request_hash: str,
+        request: dict,
+        response: dict,
+        model: str | None,
+    ) -> None:
+        """Idempotent: re-capturing the same (session, step) refreshes the cached exchange."""
+        assert self._db is not None
+        from datetime import datetime
+
+        await self._db.execute(
+            "INSERT INTO exchanges "
+            "(session_id, step_index, request_hash, request_json, response_json, model, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(session_id, step_index) DO UPDATE SET "
+            "request_hash = excluded.request_hash, request_json = excluded.request_json, "
+            "response_json = excluded.response_json, model = excluded.model;",
+            (
+                session_id,
+                step_index,
+                request_hash,
+                json.dumps(request),
+                json.dumps(response),
+                model,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        await self._db.commit()
+
+    async def get_exchanges(self, session_id: str) -> list[dict]:
+        assert self._db is not None
+        cur = await self._db.execute(
+            "SELECT step_index, request_hash, request_json, response_json, model "
+            "FROM exchanges WHERE session_id = ? ORDER BY step_index ASC;",
+            (session_id,),
+        )
+        return [
+            {
+                "step_index": row["step_index"],
+                "request_hash": row["request_hash"],
+                "request": json.loads(row["request_json"]),
+                "response": json.loads(row["response_json"]),
+                "model": row["model"],
+            }
+            for row in await cur.fetchall()
+        ]
+
+    async def get_cached_response(self, request_hash: str) -> dict | None:
+        """Content-addressed lookup: any exchange with this request hash (identical content =>
+        identical response, so replay serves it without ever calling upstream)."""
+        assert self._db is not None
+        cur = await self._db.execute(
+            "SELECT response_json FROM exchanges WHERE request_hash = ? LIMIT 1;", (request_hash,)
+        )
+        row = await cur.fetchone()
+        if row is None or row["response_json"] is None:
+            return None
+        parsed = json.loads(row["response_json"])
+        return parsed if isinstance(parsed, dict) else None
 
     async def close(self) -> None:
         if self._db is not None:
