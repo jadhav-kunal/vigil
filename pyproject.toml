@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+eval = ["matplotlib>=3.8", "scipy>=1.11"]
 redis = ["redis>=5.0", "redisvl>=0.3"]
 sentry = ["sentry-sdk>=2.0"]
 tracing = [
@@ -63,4 +64,4 @@ files = ["packages/proxy/vigil_proxy", "eval"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["packages/proxy/tests", "eval/tests"]
-pythonpath = ["packages/proxy"]
+pythonpath = ["packages/proxy", "."]

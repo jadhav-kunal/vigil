@@ -60,6 +60,27 @@ degenerates it acts.
   cache-hit rates. The evaluation harness reports the break-even per workload; we never claim
   a flat saving.
 
+## Benchmark — proving the savings
+
+The savings claims are backed by a deterministic, offline benchmark (no network, no real LLM —
+a scripted mock upstream replays labeled trajectories, so the whole thing is reproducible from a
+seed):
+
+```bash
+pip install -e ".[eval]"          # matplotlib + scipy for plots and stats
+python -m eval.benchmark --seeds 20
+```
+
+It runs an **ablation ladder** (C0 control → each mechanism alone → full Vigil) over three
+datasets — looping sessions (must trip), healthy-repetitive sessions (must **not** trip), and
+normal tasks (verifiable success) — on a paired design, and writes six artifacts to `eval/out/`:
+a savings table with bootstrap 95% CIs, a per-mechanism ablation, a **net** accounting (savings
+minus Vigil's own overhead) with break-even regimes, a detection report (confusion matrix split
+into *cosine/entropy math only* vs *math + goal-judge*, so the math isn't credited with what the
+judge adds), `results.json`, and PNG plots. The headline carries a paired Wilcoxon test, and
+compression ratios are reported **per dataset** (looping context compresses far more than normal
+context — conflating them is the dishonest move we avoid).
+
 ## Local vs. full mode
 
 The same binary runs both. With nothing but a SQLite file and one provider key it boots and

@@ -1,6 +1,7 @@
 """Proxy app: health, unary passthrough (unmodified), and background step capture."""
 
 import json
+import time
 
 import httpx
 from fastapi.testclient import TestClient
@@ -14,6 +15,19 @@ from vigil_proxy.normalize import normalize_openai_request
 from vigil_proxy.pricing import DEFAULT_PRICE_TABLE
 from vigil_proxy.settings import Settings
 from vigil_proxy.store import SQLiteStore
+
+
+def _wait_metrics(client: TestClient, session_id: str, *, tries: int = 200) -> dict:
+    """Poll the metrics endpoint until the background capture task (Invariant I1: analysis runs
+    off the response path) has persisted at least one step. Each GET pumps the event loop and the
+    sleep yields wall-time to the embedding thread, so the wait is robust under full-suite load."""
+    m = {"steps": 0}
+    for _ in range(tries):
+        m = client.get(f"/metrics/session/{session_id}").json()
+        if m.get("steps", 0) >= 1:
+            return m
+        time.sleep(0.01)
+    return m
 
 
 def _test_analyzer():
@@ -112,7 +126,7 @@ def test_session_metrics_endpoint():
             headers={"authorization": "Bearer k", "x-vigil-session-id": "m1"},
             json={"model": "gpt-4o", "messages": [{"role": "user", "content": "q"}]},
         )
-        m = client.get("/metrics/session/m1").json()
+        m = _wait_metrics(client, "m1")
         assert m["session_id"] == "m1"
         assert m["steps"] >= 1
         assert m["cost_usd"] > 0
@@ -171,7 +185,7 @@ def test_compression_collapses_loop_on_the_wire_and_records_savings():
             if m.get("role") == "tool":
                 assert fwd[i - 1].get("role") == "assistant" and fwd[i - 1].get("tool_calls")
 
-        m = client.get("/metrics/session/loop1").json()
+        m = _wait_metrics(client, "loop1")
         assert m["tokens_before_compression"] > m["tokens_after_compression"]
         assert m["tokens_saved"] > 0
 
@@ -203,7 +217,7 @@ def test_governor_routes_extraction_to_cheaper_model_on_the_wire():
             )
             assert r.json() == upstream  # agent still gets the upstream response verbatim
             assert forwarded["body"]["model"] == "gpt-4o-mini"  # routed down before forwarding
-            m = client.get("/metrics/session/gov1").json()
+            m = _wait_metrics(client, "gov1")
             assert m["models_used"] == ["gpt-4o-mini"]  # model_used reflects the routed model
         finally:
             app.state.settings.governor_enabled = False  # don't leak the toggle to other tests

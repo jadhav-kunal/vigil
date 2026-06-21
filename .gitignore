@@ -39,6 +39,7 @@ vigil.db*
 eval/results.json
 eval/*.png
 eval/*.csv
+eval/out/
 
 # --- Node / dashboard / cli ---
 node_modules/
