@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     judge_api_key: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_API_KEY")
     judge_model: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_MODEL")
 
+    # --- Compression Layer 1 (spec 4.5): always-on, free, structural ---
+    compress_enabled: bool = Field(default=True, validation_alias="VIGIL_COMPRESS_ENABLED")
+    compress_min_tool_bytes: int = Field(
+        default=4000, validation_alias="VIGIL_COMPRESS_MIN_TOOL_BYTES"
+    )
+    compress_floor_messages: int = Field(
+        default=6, validation_alias="VIGIL_COMPRESS_FLOOR_MESSAGES"
+    )
+    compress_dedup_min_run: int = Field(default=3, validation_alias="VIGIL_COMPRESS_DEDUP_MIN_RUN")
+
     # --- Optional: compression Layer 2 (Token Company) ---
     ttc_api_key: str | None = Field(default=None, validation_alias="TTC_API_KEY")
     ttc_base_url: str | None = Field(default=None, validation_alias="TTC_BASE_URL")

@@ -24,11 +24,17 @@ from starlette.websockets import WebSocketDisconnect
 from .analyzer import Analyzer, make_analyzer
 from .breaker import is_mitigating, is_open
 from .breaker_manager import BreakerManager, make_breaker
+from .compressor import compress_messages
 from .embedder import make_embedder
 from .hub import Broadcaster, step_event
 from .judge import make_judge
 from .logging_config import get_logger, log_event, set_level
-from .normalize import build_step, normalize_anthropic_request, normalize_openai_request
+from .normalize import (
+    build_step,
+    estimate_messages_tokens,
+    normalize_anthropic_request,
+    normalize_openai_request,
+)
 from .pricing import PriceTable, estimate_cost, load_price_table
 from .settings import Settings, get_settings
 from .state_mutation import caused_state_mutation
@@ -64,6 +70,9 @@ class CaptureCtx:
     analyzer: Analyzer
     breaker: BreakerManager
     model_used: str | None = None
+    # Same-estimator measurement of the message array before/after Layer 1 compression.
+    tokens_before: int | None = None
+    tokens_after: int | None = None
 
 
 @asynccontextmanager
@@ -252,6 +261,37 @@ def _apply_mitigations(parsed: dict, provider: str, settings: Settings) -> tuple
     return parsed, downgrade
 
 
+def _compress_request(parsed: dict, ctx: CaptureCtx, settings: Settings, session_id: str) -> bool:
+    """Layer 1 compression (spec 4.5) on the request path. Records before/after token estimates
+    (the same-estimator savings proof) on ctx, and returns True if the body was rewritten."""
+    messages = parsed.get("messages")
+    if not settings.compress_enabled or not isinstance(messages, list):
+        return False
+    ctx.tokens_before = estimate_messages_tokens(messages)
+    compressed, stats = compress_messages(
+        messages,
+        min_tool_bytes=settings.compress_min_tool_bytes,
+        floor_messages=settings.compress_floor_messages,
+        dedup_min_run=settings.compress_dedup_min_run,
+    )
+    ctx.tokens_after = estimate_messages_tokens(compressed)
+    if not stats.changed:
+        return False
+    parsed["messages"] = compressed
+    log_event(
+        logger,
+        20,
+        "compress.layer1",
+        session=session_id,
+        collapsed_runs=stats.collapsed_runs,
+        dropped_messages=stats.dropped_messages,
+        truncated_outputs=stats.truncated_outputs,
+        tokens_before=ctx.tokens_before,
+        tokens_after=ctx.tokens_after,
+    )
+    return True
+
+
 def _tool_is_mutating(tool: dict) -> bool:
     if not isinstance(tool, dict):
         return False
@@ -316,10 +356,15 @@ async def _proxy(request: Request, *, provider: str) -> Response:
             },
             status_code=503,
         )
+    rewritten = False
     if is_mitigating(snap.state):
         parsed, ctx.model_used = _apply_mitigations(parsed, provider, settings)
-        body = json.dumps(parsed).encode()
+        rewritten = True
         log_event(logger, 20, "breaker.mitigate", session=session_id, downgraded_to=ctx.model_used)
+
+    rewritten = _compress_request(parsed, ctx, settings, session_id) or rewritten
+    if rewritten:
+        body = json.dumps(parsed).encode()
 
     if req.stream:
         return await _proxy_streaming(
@@ -403,6 +448,8 @@ async def _capture(ctx: CaptureCtx, req, resp_json, session_id, mutation_overrid
             step_index=0,  # real index assigned atomically by append_step
             model_used=ctx.model_used,  # the (possibly downgraded) model actually forwarded
             state_mutation_override=mutation_override,
+            tokens_before_compression=ctx.tokens_before,
+            tokens_after_compression=ctx.tokens_after,
         )
         # Watchdog runs in the background task and embeds in a worker thread (Invariant I1).
         result = await ctx.analyzer.analyze(step)

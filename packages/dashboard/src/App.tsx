@@ -60,11 +60,15 @@ export default function App() {
   const totals = useMemo(() => {
     let cost = 0;
     let tokens = 0;
+    let before = 0;
+    let after = 0;
     for (const s of steps) {
       cost += s.cost_usd || 0;
       tokens += s.prompt_tokens ?? 0;
+      before += s.tokens_before_compression ?? 0;
+      after += s.tokens_after_compression ?? 0;
     }
-    return { cost, tokens };
+    return { cost, tokens, saved: Math.max(0, before - after), before };
   }, [steps]);
 
   const currentBreaker = selectedSession ? (breakers[selectedSession] ?? null) : null;
@@ -80,6 +84,8 @@ export default function App() {
             steps={steps.length}
             tokens={totals.tokens}
             cost={totals.cost}
+            saved={totals.saved}
+            before={totals.before}
           />
         </div>
         <div className="pt-4 pr-0">

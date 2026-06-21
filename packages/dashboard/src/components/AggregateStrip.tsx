@@ -26,17 +26,27 @@ export function AggregateStrip({
   steps,
   tokens,
   cost,
+  saved,
+  before,
 }: {
   sessions: number;
   steps: number;
   tokens: number;
   cost: number;
+  saved: number;
+  before: number;
 }) {
+  const pct = before > 0 ? Math.round((saved / before) * 100) : 0;
   return (
-    <div className="grid grid-cols-4 gap-3 px-6 py-4">
+    <div className="grid grid-cols-5 gap-3 px-6 py-4">
       <Stat label="sessions" value={String(sessions)} />
       <Stat label="steps observed" value={String(steps)} />
       <Stat label="tokens in" value={compactNum(tokens)} />
+      <Stat
+        label="context saved"
+        value={compactNum(saved)}
+        sub={saved > 0 ? `${pct}% of input` : "no redundancy"}
+      />
       <Stat label="cost" value={usd(cost)} />
     </div>
   );

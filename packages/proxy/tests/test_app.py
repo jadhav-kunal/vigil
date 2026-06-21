@@ -1,5 +1,7 @@
 """Proxy app: health, unary passthrough (unmodified), and background step capture."""
 
+import json
+
 import httpx
 from fastapi.testclient import TestClient
 
@@ -114,6 +116,64 @@ def test_session_metrics_endpoint():
         assert m["session_id"] == "m1"
         assert m["steps"] >= 1
         assert m["cost_usd"] > 0
+
+
+def test_compression_collapses_loop_on_the_wire_and_records_savings():
+    """Slice 5: a looping conversation is compressed BEFORE forwarding upstream, the agent still
+    gets the upstream response verbatim, and the step records tokens_before > tokens_after."""
+    forwarded: dict = {}
+    upstream = {
+        "choices": [{"message": {"content": "done"}}],
+        "usage": {"prompt_tokens": 50, "completion_tokens": 2},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forwarded["body"] = json.loads(request.content)
+        return httpx.Response(200, json=upstream)
+
+    msgs = [
+        {"role": "system", "content": "You are a release agent."},
+        {"role": "user", "content": "Ship it."},
+    ]
+    for _ in range(6):
+        msgs += [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "c",
+                        "type": "function",
+                        "function": {"name": "check_status", "arguments": "{}"},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c", "content": "still pending"},
+        ]
+    msgs.append({"role": "user", "content": "Any update?"})
+
+    with TestClient(app) as client:
+        app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        r = client.post(
+            "/v1/chat/completions",
+            headers={"authorization": "Bearer k", "x-vigil-session-id": "loop1"},
+            json={"model": "gpt-4o", "messages": msgs},
+        )
+        assert (
+            r.json()["choices"][0]["message"]["content"] == "done"
+        )  # agent sees upstream verbatim
+        fwd = forwarded["body"]["messages"]
+        assert len(fwd) < len(msgs)  # collapsed cycles were dropped before forwarding
+        markers = [m for m in fwd if str(m.get("content", "")).startswith("[vigil-compressed]")]
+        assert len(markers) == 1
+        # every remaining tool message still follows an assistant tool_call (request stays valid)
+        for i, m in enumerate(fwd):
+            if m.get("role") == "tool":
+                assert fwd[i - 1].get("role") == "assistant" and fwd[i - 1].get("tool_calls")
+
+        m = client.get("/metrics/session/loop1").json()
+        assert m["tokens_before_compression"] > m["tokens_after_compression"]
+        assert m["tokens_saved"] > 0
 
 
 def test_override_endpoint_resets_breaker():

@@ -6,6 +6,7 @@ the provider omits usage (e.g. streaming without `stream_options.include_usage`)
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .models import NormalizedRequest, Step
@@ -15,6 +16,16 @@ from .state_mutation import caused_state_mutation
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token) for when provider usage is absent."""
     return max(1, len(text) // 4) if text else 0
+
+
+def estimate_messages_tokens(messages: list[dict]) -> int:
+    """Estimate the token footprint of the whole message array as sent on the wire.
+
+    Unlike `estimate_prompt_tokens` (text only, used to approximate provider prompt usage), this
+    counts the full serialized payload — tool_calls and tool results included — so it reflects the
+    real context size Layer 1 compression shrinks. This is the before/after savings measurement.
+    """
+    return estimate_tokens(json.dumps(messages, separators=(",", ":"), default=str))
 
 
 def _message_text(content: Any) -> str:
@@ -140,8 +151,15 @@ def build_step(
     step_index: int,
     model_used: str | None = None,
     state_mutation_override: bool | None = None,
+    tokens_before_compression: int | None = None,
+    tokens_after_compression: int | None = None,
 ) -> Step:
-    """Assemble a `Step` from a normalized request and the upstream JSON response."""
+    """Assemble a `Step` from a normalized request and the upstream JSON response.
+
+    ``tokens_before/after_compression`` are the same-estimator measurements of the message array
+    before and after Layer 1 compression (slice 5); when absent (compression disabled), both
+    default to the prompt size so the columns are never NULL and savings reads as zero.
+    """
     if req.provider == "anthropic":
         text, tool_name, tool_args, ptok, ctok = _anthropic_extract(response)
     else:
@@ -155,6 +173,8 @@ def build_step(
         ptok = estimate_prompt_tokens(req.messages)
 
     mutated = caused_state_mutation(tool_name, metadata_override=state_mutation_override)
+    before = tokens_before_compression if tokens_before_compression is not None else ptok
+    after = tokens_after_compression if tokens_after_compression is not None else ptok
 
     return Step(
         session_id=session_id,
@@ -166,8 +186,7 @@ def build_step(
         assistant_text=text,
         prompt_tokens=ptok,
         completion_tokens=ctok,
-        # No compression yet (Slice 5 diverges these); record context size as-is.
-        tokens_before_compression=ptok,
-        tokens_after_compression=ptok,
+        tokens_before_compression=before,
+        tokens_after_compression=after,
         caused_state_mutation=mutated,
     )

@@ -33,6 +33,9 @@ export function StepDetail({ step, onClose }: { step: Step | null; onClose: () =
   }
   const c = modelChip(step.model_used);
   const rerouted = step.model_requested !== step.model_used;
+  const before = step.tokens_before_compression ?? 0;
+  const after = step.tokens_after_compression ?? 0;
+  const compressed = before > after;
   return (
     <aside
       className="w-80 shrink-0 p-5 overflow-y-auto fade-in flex flex-col gap-4"
@@ -67,6 +70,15 @@ export function StepDetail({ step, onClose }: { step: Step | null; onClose: () =
         <Field label="cost">{usd(step.cost_usd)}</Field>
         <Field label="time">{shortTime(step.timestamp)}</Field>
       </div>
+
+      {compressed && (
+        <Field label="context compressed">
+          <span style={{ color: "var(--text-faint)" }}>{before}</span>
+          {" → "}
+          <span style={{ color: "var(--accent)" }}>{after}</span>
+          <span style={{ color: "var(--text-faint)" }}> tok ({before - after} saved)</span>
+        </Field>
+      )}
 
       {step.tool_name && (
         <Field label="tool call">
