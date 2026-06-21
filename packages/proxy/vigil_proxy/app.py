@@ -21,6 +21,8 @@ from fastapi import FastAPI, Request, Response, WebSocket
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.websockets import WebSocketDisconnect
 
+from .analyzer import Analyzer, make_analyzer
+from .embedder import make_embedder
 from .hub import Broadcaster, step_event
 from .logging_config import get_logger, log_event, set_level
 from .normalize import build_step, normalize_anthropic_request, normalize_openai_request
@@ -55,6 +57,7 @@ class CaptureCtx:
     store: Store
     broadcaster: Broadcaster
     price_table: PriceTable
+    analyzer: Analyzer
 
 
 @asynccontextmanager
@@ -65,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.store = await make_store(settings)
     app.state.broadcaster = Broadcaster()
     app.state.price_table = load_price_table(settings)
+    app.state.analyzer = make_analyzer(settings, make_embedder(settings))
     app.state.http = httpx.AsyncClient(timeout=settings.upstream_timeout_s)
     log_event(logger, 20, "proxy.start", port=settings.port, redis=settings.use_redis)
     try:
@@ -122,9 +126,21 @@ async def ws(websocket: WebSocket) -> None:
     broadcaster: Broadcaster = websocket.app.state.broadcaster
     store: Store = websocket.app.state.store
     table: PriceTable = websocket.app.state.price_table
+    settings: Settings = websocket.app.state.settings
     await broadcaster.accept(websocket)
     try:
-        await websocket.send_json({"type": "hello", "price_table": _table_json(table)})
+        await websocket.send_json(
+            {
+                "type": "hello",
+                "price_table": _table_json(table),
+                "thresholds": {
+                    "theta_sim": settings.theta_sim,
+                    "theta_ent": settings.theta_ent,
+                    "window": settings.window,
+                    "trip_streak": settings.trip_streak,
+                },
+            }
+        )
         await _send_snapshot(websocket, store, table)
         # Join the fan-out only after the snapshot is fully sent, so a live broadcast can never
         # send on this socket concurrently with the snapshot loop.
@@ -183,6 +199,7 @@ async def _proxy(request: Request, *, provider: str) -> Response:
         store=request.app.state.store,
         broadcaster=request.app.state.broadcaster,
         price_table=request.app.state.price_table,
+        analyzer=request.app.state.analyzer,
     )
 
     body = await request.body()
@@ -286,6 +303,16 @@ async def _capture(ctx: CaptureCtx, req, resp_json, session_id, mutation_overrid
             step_index=0,  # real index assigned atomically by append_step
             state_mutation_override=mutation_override,
         )
+        # Watchdog runs in the background task and embeds in a worker thread (Invariant I1).
+        result = await ctx.analyzer.analyze(step)
+        step.sim_score = result.sim_score
+        step.tool_entropy = result.tool_entropy
+        step.state_penalty = result.state_penalty
+        step.final_score = result.final_score
+        step.watchdog_breach = result.breach
+        step.watchdog_streak = result.streak
+        step.watchdog_tripped = result.tripped
+
         step.step_index = await ctx.store.append_step(step)
         await ctx.broadcaster.broadcast(step_event(step, ctx.price_table))
         log_event(
@@ -296,7 +323,10 @@ async def _capture(ctx: CaptureCtx, req, resp_json, session_id, mutation_overrid
             step=step.step_index,
             model=step.model_used,
             tool=step.tool_name or "-",
-            mutated=step.caused_state_mutation,
+            sim=step.sim_score,
+            ent=step.tool_entropy,
+            final=step.final_score,
+            tripped=step.watchdog_tripped,
         )
     except Exception as exc:  # analysis must never crash the proxy
         log_event(logger, 40, "step.capture_failed", session=session_id, error=str(exc))

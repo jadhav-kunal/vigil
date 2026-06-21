@@ -12,6 +12,8 @@ import vigil_proxy.settings as settings_mod
 def _isolated_db(tmp_path_factory):
     db = tmp_path_factory.mktemp("vigil") / "test.db"
     os.environ["VIGIL_DB_PATH"] = str(db)
+    # Use the deterministic hashing embedder so tests never download the ML model.
+    os.environ["VIGIL_EMBED_HASHING"] = "true"
     # Reset the cached settings singleton so the temp DB path is read.
     settings_mod._settings = None
     yield

@@ -12,6 +12,14 @@ export interface Step {
   tokens_after_compression: number | null;
   timestamp: string;
   caused_state_mutation: boolean;
+  // Watchdog metrics (spec 4.2):
+  sim_score: number | null;
+  tool_entropy: number | null;
+  state_penalty: number | null;
+  final_score: number | null;
+  watchdog_breach: boolean;
+  watchdog_streak: number;
+  watchdog_tripped: boolean;
   breaker_override: boolean;
   breaker_state: string | null;
   // Added by the server on the wire:
@@ -20,8 +28,19 @@ export interface Step {
   output_rate_per_1k: number;
 }
 
+export interface Thresholds {
+  theta_sim: number;
+  theta_ent: number;
+  window: number;
+  trip_streak: number;
+}
+
 export type ServerMessage =
-  | { type: "hello"; price_table: Record<string, [number, number]> }
+  | {
+      type: "hello";
+      price_table: Record<string, [number, number]>;
+      thresholds: Thresholds;
+    }
   | { type: "snapshot"; count: number }
   | { type: "step"; step: Step };
 

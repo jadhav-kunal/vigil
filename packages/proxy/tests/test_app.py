@@ -3,11 +3,17 @@
 import httpx
 from fastapi.testclient import TestClient
 
+from vigil_proxy.analyzer import Analyzer
 from vigil_proxy.app import CaptureCtx, _capture, app
+from vigil_proxy.embedder import HashingEmbedder
 from vigil_proxy.hub import Broadcaster
 from vigil_proxy.normalize import normalize_openai_request
 from vigil_proxy.pricing import DEFAULT_PRICE_TABLE
 from vigil_proxy.store import SQLiteStore
+
+
+def _test_analyzer():
+    return Analyzer(HashingEmbedder(), window=5, trip_streak=3, theta_sim=0.85, theta_ent=0.30)
 
 
 def test_health():
@@ -49,7 +55,12 @@ async def test_capture_persists_and_broadcasts_step(tmp_path):
         async def broadcast(self, message):
             sent.append(message)
 
-    ctx = CaptureCtx(store=store, broadcaster=FakeBroadcaster(), price_table=DEFAULT_PRICE_TABLE)
+    ctx = CaptureCtx(
+        store=store,
+        broadcaster=FakeBroadcaster(),
+        price_table=DEFAULT_PRICE_TABLE,
+        analyzer=_test_analyzer(),
+    )
     req = normalize_openai_request({"model": "gpt-4o", "messages": []})
     resp = {
         "choices": [{"message": {"content": "ok"}}],
@@ -60,9 +71,10 @@ async def test_capture_persists_and_broadcasts_step(tmp_path):
     assert len(steps) == 1
     assert steps[0].assistant_text == "ok"
     assert steps[0].step_index == 0
-    # The step was broadcast with a computed cost.
+    # The step was broadcast with a computed cost and watchdog metrics.
     assert len(sent) == 1 and sent[0]["type"] == "step"
     assert "cost_usd" in sent[0]["step"]
+    assert "sim_score" in sent[0]["step"] and "final_score" in sent[0]["step"]
     await store.close()
 
 

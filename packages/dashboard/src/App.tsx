@@ -4,6 +4,7 @@ import type { SessionAgg, Step } from "./types";
 import { TopBar } from "./components/TopBar";
 import { AggregateStrip } from "./components/AggregateStrip";
 import { CostSparkline } from "./components/CostSparkline";
+import { TrajectoryChart } from "./components/TrajectoryChart";
 import { SessionList } from "./components/SessionList";
 import { StepLog } from "./components/StepLog";
 import { StepDetail } from "./components/StepDetail";
@@ -36,7 +37,7 @@ function aggregate(steps: Step[]): SessionAgg[] {
 }
 
 export default function App() {
-  const { conn, steps } = useVigilSocket();
+  const { conn, steps, thresholds } = useVigilSocket();
   const sessions = useMemo(() => aggregate(steps), [steps]);
 
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
@@ -82,6 +83,10 @@ export default function App() {
         <div className="pt-4 pr-0">
           <CostSparkline steps={currentSteps} />
         </div>
+      </div>
+
+      <div className="px-6 pb-3">
+        <TrajectoryChart steps={currentSteps} thresholds={thresholds} />
       </div>
 
       <div className="flex flex-1 min-h-0 mt-1" style={{ borderTop: "1px solid var(--border)" }}>

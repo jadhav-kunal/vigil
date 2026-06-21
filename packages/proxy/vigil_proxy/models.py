@@ -31,6 +31,14 @@ class Step(BaseModel):
     tokens_after_compression: int | None = None
     timestamp: str = Field(default_factory=_utcnow_iso)
     caused_state_mutation: bool = False
+    # Watchdog metrics (spec 4.2), filled by the analyzer on the analysis path.
+    sim_score: float | None = None
+    tool_entropy: float | None = None
+    state_penalty: float | None = None
+    final_score: float | None = None
+    watchdog_breach: bool = False
+    watchdog_streak: int = 0
+    watchdog_tripped: bool = False
     # Populated by later slices; carried here so the schema is stable.
     breaker_override: bool = False
     breaker_state: str | None = None

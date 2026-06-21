@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     recovery_steps: int = Field(default=3, validation_alias="VIGIL_RECOVERY_STEPS")
     session_mode: str = Field(default="normal", validation_alias="VIGIL_SESSION_MODE")
 
+    # --- Embedding model for the watchdog (spec 4.2) ---
+    embed_model: str = Field(default="all-MiniLM-L6-v2", validation_alias="VIGIL_EMBED_MODEL")
+    # Force the deterministic hashing embedder (offline / tests); skips the ML model entirely.
+    embed_hashing: bool = Field(default=False, validation_alias="VIGIL_EMBED_HASHING")
+
     # --- Optional: goal judge / governor LLM classifier (OpenAI-compatible) ---
     judge_base_url: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_BASE_URL")
     judge_api_key: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_API_KEY")
