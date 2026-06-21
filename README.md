@@ -129,6 +129,7 @@ uv run ruff check packages/proxy eval && uv run black --check packages/proxy eva
 | `POST /v1/messages` | Anthropic-compatible proxy |
 | `GET /health` | Liveness check |
 | `GET /metrics/session/{id}` | Per-session steps, tokens, compression savings, cost |
+| `GET /metrics/aggregate` | Cross-session totals (counts only — never prompt content) |
 | `GET /sessions/{id}/breaker` | Breaker state, trip step, post-mortem |
 | `POST /sessions/{id}/override` | Reset a tripped breaker to CLOSED |
 | `POST /sessions/{id}/replay` | Cached-trace replay — rebuilds the trajectory, zero upstream calls |
@@ -149,6 +150,46 @@ commented list). The defaults boot a fully working local proxy. The notable togg
 | `VIGIL_EMBED_HASHING` | `false` | Use the offline hashing embedder (skip the ML model download) |
 | `VIGIL_WINDOW` / `VIGIL_TRIP_STREAK` / `VIGIL_THETA_SIM` / `VIGIL_THETA_ENT` | `5 / 3 / 0.85 / 0.30` | Watchdog detection thresholds |
 | `VIGIL_JUDGE_*` | unset | Optional LLM goal-judge (degrades to cosine+entropy if absent) |
+
+## CLI
+
+A dependency-free Node CLI for setup and a self-contained demo. From a clone use
+`node cli/vigil.js <cmd>`; once published, `npx vigil <cmd>`.
+
+```bash
+npx vigil init      # print the one-line base_url integration (OpenAI/Anthropic, Python/Node)
+npx vigil prompt    # print a copy-paste prompt for an AI coding agent (below)
+npx vigil demo      # scripted runaway loop -> watch the breaker trip and freeze the cost meter
+```
+
+`vigil demo` starts a looping mock upstream, drives a running proxy with one session, and shows
+the breaker move `CLOSED → HALF_OPEN → OPEN` (by ~step 7) with the projected cost it capped — no
+API key required. The same setup and prompt are also on the dashboard's **docs** tab.
+
+## Integrate with an AI coding agent
+
+Paste this into Claude Code, Cursor, or any coding agent to wire Vigil into an existing app:
+
+```text
+Integrate Vigil into this codebase. Vigil is a transparent LLM proxy that watches an agent's
+trajectory and halts runaway loops before they burn budget. It speaks the OpenAI and Anthropic
+APIs and forwards to the real provider, so the ONLY change needed is the client's base URL — do
+not change prompts, models, keys, or any other logic.
+
+Steps:
+1. Find every place an OpenAI or Anthropic client is constructed (e.g. OpenAI(), AsyncOpenAI(),
+   Anthropic(), LangChain/LlamaIndex model configs, or a raw base_url/baseURL setting).
+2. Point base_url at the Vigil proxy, read from an env var so it is easy to toggle:
+     OpenAI:    base_url = os.environ.get("VIGIL_BASE_URL", "http://localhost:8765/v1")
+     Anthropic: base_url = os.environ.get("VIGIL_BASE_URL", "http://localhost:8765")
+3. Leave the API key exactly as-is — Vigil passes it straight through and never stores it.
+4. Recommended: set a per-run session id header so Vigil groups one agent run into one trajectory:
+     default_headers={"x-vigil-session-id": "<a stable id for this run>"}
+5. Verify: curl http://localhost:8765/health returns {"status":"ok"}; after a request,
+   curl http://localhost:8765/metrics/session/<id> shows the captured steps.
+
+Make the minimal edit, keep it behind the VIGIL_BASE_URL env var, and do not alter behavior.
+```
 
 ## What it does (plainly)
 

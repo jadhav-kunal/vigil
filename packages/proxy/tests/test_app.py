@@ -290,6 +290,34 @@ def test_replay_endpoint_reconstructs_session_with_zero_upstream_calls():
         assert isinstance(body["trace_hash"], str) and len(body["trace_hash"]) == 64
 
 
+def test_metrics_aggregate_counts_only_no_content():
+    """Slice 10: /metrics/aggregate reports cross-session COUNTS and never echoes prompt/tool
+    content (the privacy invariant)."""
+    body = {
+        "choices": [{"message": {"content": "answer"}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with TestClient(app) as client:
+        app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        client.post(
+            "/v1/chat/completions",
+            headers={"authorization": "Bearer k", "x-vigil-session-id": "agg1"},
+            json={"model": "gpt-4o", "messages": [{"role": "user", "content": "secret prompt"}]},
+        )
+        _wait_metrics(client, "agg1")
+        agg = client.get("/metrics/aggregate").json()
+        assert agg["sessions"] >= 1 and agg["steps"] >= 1
+        assert agg["cost_usd"] > 0
+        assert "gpt-4o" in agg["models_used"]
+        # The privacy invariant: no message text anywhere in the aggregate payload.
+        assert "secret prompt" not in json.dumps(agg)
+        assert "answer" not in json.dumps(agg)
+
+
 def test_replay_unknown_session_is_404():
     with TestClient(app) as client:
         r = client.post("/sessions/does-not-exist/replay")

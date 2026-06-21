@@ -74,6 +74,9 @@ class Store(abc.ABC):
     async def list_sessions(self) -> list[str]: ...
 
     @abc.abstractmethod
+    async def aggregate(self) -> dict: ...
+
+    @abc.abstractmethod
     async def update_breaker_fields(
         self, session_id: str, step_index: int, breaker_state: str | None, breaker_override: bool
     ) -> None: ...
@@ -230,6 +233,49 @@ class SQLiteStore(Store):
         assert self._db is not None
         cur = await self._db.execute("SELECT DISTINCT session_id FROM steps ORDER BY session_id;")
         return [row["session_id"] for row in await cur.fetchall()]
+
+    async def aggregate(self) -> dict:
+        """Cross-session COUNTS ONLY (spec 4.8 privacy invariant: never prompt/tool content).
+
+        Computed in SQL so it stays cheap; the per-model token sums let the endpoint price cost
+        without reading any message text.
+        """
+        assert self._db is not None
+        cur = await self._db.execute(
+            "SELECT COUNT(DISTINCT session_id) AS sessions, COUNT(*) AS steps, "
+            "COALESCE(SUM(prompt_tokens),0) AS ptok, COALESCE(SUM(completion_tokens),0) AS ctok, "
+            "COALESCE(SUM(tokens_before_compression),0) AS before, "
+            "COALESCE(SUM(tokens_after_compression),0) AS after FROM steps;"
+        )
+        totals = await cur.fetchone()
+        cur = await self._db.execute(
+            "SELECT COUNT(DISTINCT session_id) AS n FROM steps WHERE breaker_state = 'OPEN';"
+        )
+        open_row = await cur.fetchone()
+        cur = await self._db.execute(
+            "SELECT model_used, COUNT(*) AS steps, COALESCE(SUM(prompt_tokens),0) AS ptok, "
+            "COALESCE(SUM(completion_tokens),0) AS ctok FROM steps "
+            "WHERE model_used IS NOT NULL GROUP BY model_used;"
+        )
+        model_rows = await cur.fetchall()
+        assert totals is not None and open_row is not None  # COUNT(*) always yields a row
+        return {
+            "sessions": int(totals["sessions"] or 0),
+            "steps": int(totals["steps"] or 0),
+            "prompt_tokens": int(totals["ptok"] or 0),
+            "completion_tokens": int(totals["ctok"] or 0),
+            "tokens_before_compression": int(totals["before"] or 0),
+            "tokens_after_compression": int(totals["after"] or 0),
+            "breaker_open_sessions": int(open_row["n"] or 0),
+            "by_model": {
+                r["model_used"]: {
+                    "steps": int(r["steps"] or 0),
+                    "prompt_tokens": int(r["ptok"] or 0),
+                    "completion_tokens": int(r["ctok"] or 0),
+                }
+                for r in model_rows
+            },
+        }
 
     async def update_breaker_fields(
         self, session_id: str, step_index: int, breaker_state: str | None, breaker_override: bool

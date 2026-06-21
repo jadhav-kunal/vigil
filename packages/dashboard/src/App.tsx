@@ -8,6 +8,7 @@ import { TrajectoryChart } from "./components/TrajectoryChart";
 import { SessionList } from "./components/SessionList";
 import { StepLog } from "./components/StepLog";
 import { StepDetail } from "./components/StepDetail";
+import { DocsPanel } from "./components/DocsPanel";
 
 function aggregate(steps: Step[]): SessionAgg[] {
   const map = new Map<string, SessionAgg>();
@@ -42,6 +43,7 @@ export default function App() {
 
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
   const [selectedStep, setSelectedStep] = useState<number | null>(null);
+  const [view, setView] = useState<"live" | "docs">("live");
 
   // Auto-select the most recently active session once traffic appears.
   useEffect(() => {
@@ -75,44 +77,59 @@ export default function App() {
 
   return (
     <div className="h-full flex flex-col" style={{ background: "var(--bg)" }}>
-      <TopBar conn={conn} totalCost={current?.cost ?? 0} breaker={currentBreaker} />
+      <TopBar
+        conn={conn}
+        totalCost={current?.cost ?? 0}
+        breaker={currentBreaker}
+        view={view}
+        onView={setView}
+      />
 
-      <div className="grid grid-cols-4 gap-3 px-6 pt-4">
-        <div className="col-span-3">
-          <AggregateStrip
-            sessions={sessions.length}
-            steps={steps.length}
-            tokens={totals.tokens}
-            cost={totals.cost}
-            saved={totals.saved}
-            before={totals.before}
-          />
-        </div>
-        <div className="pt-4 pr-0">
-          <CostSparkline steps={currentSteps} />
-        </div>
-      </div>
+      {view === "docs" ? (
+        <DocsPanel />
+      ) : (
+        <>
+          <div className="grid grid-cols-4 gap-3 px-6 pt-4">
+            <div className="col-span-3">
+              <AggregateStrip
+                sessions={sessions.length}
+                steps={steps.length}
+                tokens={totals.tokens}
+                cost={totals.cost}
+                saved={totals.saved}
+                before={totals.before}
+              />
+            </div>
+            <div className="pt-4 pr-0">
+              <CostSparkline steps={currentSteps} />
+            </div>
+          </div>
 
-      <div className="px-6 pb-3">
-        <TrajectoryChart steps={currentSteps} thresholds={thresholds} />
-      </div>
+          <div className="px-6 pb-3">
+            <TrajectoryChart steps={currentSteps} thresholds={thresholds} />
+          </div>
 
-      <div className="flex flex-1 min-h-0 mt-1" style={{ borderTop: "1px solid var(--border)" }}>
-        <SessionList
-          sessions={sessions}
-          selected={selectedSession}
-          onSelect={(id) => {
-            setSelectedSession(id);
-            setSelectedStep(null);
-          }}
-        />
-        <StepLog
-          steps={currentSteps}
-          selectedStepIndex={selectedStep}
-          onSelect={(stepIndex) => setSelectedStep(stepIndex)}
-        />
-        <StepDetail step={detailStep} onClose={() => setSelectedStep(null)} />
-      </div>
+          <div
+            className="flex flex-1 min-h-0 mt-1"
+            style={{ borderTop: "1px solid var(--border)" }}
+          >
+            <SessionList
+              sessions={sessions}
+              selected={selectedSession}
+              onSelect={(id) => {
+                setSelectedSession(id);
+                setSelectedStep(null);
+              }}
+            />
+            <StepLog
+              steps={currentSteps}
+              selectedStepIndex={selectedStep}
+              onSelect={(stepIndex) => setSelectedStep(stepIndex)}
+            />
+            <StepDetail step={detailStep} onClose={() => setSelectedStep(null)} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

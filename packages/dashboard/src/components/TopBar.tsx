@@ -13,14 +13,42 @@ const CONN_COLOR: Record<ConnState, string> = {
   closed: "var(--danger)",
 };
 
+function Tab({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="mono text-[10px] uppercase px-2 py-0.5 rounded"
+      style={{
+        letterSpacing: "0.08em",
+        color: active ? "var(--text)" : "var(--text-faint)",
+        border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 export function TopBar({
   conn,
   totalCost,
   breaker,
+  view,
+  onView,
 }: {
   conn: ConnState;
   totalCost: number;
   breaker: BreakerInfo | null;
+  view: "live" | "docs";
+  onView: (v: "live" | "docs") => void;
 }) {
   // When the breaker halts a session, freeze the meter green and surface what was capped.
   const halted = breaker?.state === "OPEN";
@@ -34,17 +62,9 @@ export function TopBar({
         <span className="mono text-[15px] tracking-tight" style={{ letterSpacing: "-0.01em" }}>
           vigil
         </span>
-        <span
-          className="mono text-[10px] uppercase px-1.5 py-0.5 rounded"
-          style={{
-            letterSpacing: "0.08em",
-            color: "var(--text-faint)",
-            border: "1px solid var(--border)",
-          }}
-        >
-          instrument panel
-        </span>
-        {breaker && <BreakerBadge state={breaker.state} />}
+        <Tab label="live" active={view === "live"} onClick={() => onView("live")} />
+        <Tab label="docs" active={view === "docs"} onClick={() => onView("docs")} />
+        {breaker && view === "live" && <BreakerBadge state={breaker.state} />}
       </div>
 
       <div className="flex items-center gap-6">

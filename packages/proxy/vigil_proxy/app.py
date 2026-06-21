@@ -157,6 +157,33 @@ async def session_metrics(session_id: str, request: Request) -> dict:
     }
 
 
+@app.get("/metrics/aggregate")
+async def metrics_aggregate(request: Request) -> dict:
+    """Cross-session totals (spec 4.8) — COUNTS ONLY, never prompt or tool content."""
+    store: Store = request.app.state.store
+    table: PriceTable = request.app.state.price_table
+    agg = await store.aggregate()
+    cost = sum(
+        estimate_cost(model, m["prompt_tokens"], m["completion_tokens"], table)
+        for model, m in agg["by_model"].items()
+    )
+    before = agg["tokens_before_compression"]
+    after = agg["tokens_after_compression"]
+    return {
+        "sessions": agg["sessions"],
+        "steps": agg["steps"],
+        "prompt_tokens": agg["prompt_tokens"],
+        "completion_tokens": agg["completion_tokens"],
+        "tokens_before_compression": before,
+        "tokens_after_compression": after,
+        "tokens_saved": max(0, before - after),
+        "breaker_open_sessions": agg["breaker_open_sessions"],
+        "models_used": sorted(agg["by_model"].keys()),
+        "model_step_counts": {m: v["steps"] for m, v in agg["by_model"].items()},
+        "cost_usd": round(cost, 6),
+    }
+
+
 @app.post("/sessions/{session_id}/override")
 async def breaker_override(session_id: str, request: Request) -> dict:
     """Manual override (spec 4.3): reset the breaker FSM to CLOSED for this session."""

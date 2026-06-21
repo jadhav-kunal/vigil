@@ -1,0 +1,8 @@
+{
+  "name": "vigil-cli",
+  "version": "0.1.0",
+  "description": "One-line setup and a self-contained loop demo for the Vigil LLM proxy.",
+  "bin": { "vigil": "./vigil.js" },
+  "type": "commonjs",
+  "license": "MIT"
+}
