@@ -1,5 +1,6 @@
-import type { ConnState } from "../types";
+import type { BreakerInfo, ConnState } from "../types";
 import { usd } from "../lib/format";
+import { BreakerBadge } from "./BreakerBadge";
 
 const CONN_LABEL: Record<ConnState, string> = {
   connecting: "connecting",
@@ -12,7 +13,18 @@ const CONN_COLOR: Record<ConnState, string> = {
   closed: "var(--danger)",
 };
 
-export function TopBar({ conn, totalCost }: { conn: ConnState; totalCost: number }) {
+export function TopBar({
+  conn,
+  totalCost,
+  breaker,
+}: {
+  conn: ConnState;
+  totalCost: number;
+  breaker: BreakerInfo | null;
+}) {
+  // When the breaker halts a session, freeze the meter green and surface what was capped.
+  const halted = breaker?.state === "OPEN";
+  const meterColor = halted ? "var(--ok)" : "var(--text)";
   return (
     <header
       className="flex items-center justify-between px-6 h-14 shrink-0"
@@ -32,17 +44,31 @@ export function TopBar({ conn, totalCost }: { conn: ConnState; totalCost: number
         >
           instrument panel
         </span>
+        {breaker && <BreakerBadge state={breaker.state} />}
       </div>
 
       <div className="flex items-center gap-6">
+        {halted && breaker && breaker.savedEstimate > 0 && (
+          <div className="flex flex-col items-end">
+            <span
+              className="mono text-[10px] uppercase"
+              style={{ letterSpacing: "0.08em", color: "var(--text-faint)" }}
+            >
+              loop cost capped
+            </span>
+            <span className="mono text-[16px] leading-none" style={{ color: "var(--ok)" }}>
+              ~{usd(breaker.savedEstimate)}
+            </span>
+          </div>
+        )}
         <div className="flex flex-col items-end">
           <span
             className="mono text-[10px] uppercase"
             style={{ letterSpacing: "0.08em", color: "var(--text-faint)" }}
           >
-            session spend
+            {halted ? "spend (frozen)" : "session spend"}
           </span>
-          <span className="mono text-[22px] leading-none" style={{ color: "var(--text)" }}>
+          <span className="mono text-[22px] leading-none" style={{ color: meterColor }}>
             {usd(totalCost)}
           </span>
         </div>

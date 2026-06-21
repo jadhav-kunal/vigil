@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     recovery_steps: int = Field(default=3, validation_alias="VIGIL_RECOVERY_STEPS")
     session_mode: str = Field(default="normal", validation_alias="VIGIL_SESSION_MODE")
 
+    # --- Circuit breaker (spec 4.3) ---
+    breaker_downgrade_openai: str = Field(
+        default="gpt-4o-mini", validation_alias="VIGIL_BREAKER_DOWNGRADE_OPENAI"
+    )
+    breaker_downgrade_anthropic: str = Field(
+        default="claude-3-5-haiku-latest", validation_alias="VIGIL_BREAKER_DOWNGRADE_ANTHROPIC"
+    )
+    # Horizon used to estimate the loop cost the breaker capped (for the dashboard meter).
+    breaker_projection_steps: int = Field(
+        default=50, validation_alias="VIGIL_BREAKER_PROJECTION_STEPS"
+    )
+
     # --- Embedding model for the watchdog (spec 4.2) ---
     embed_model: str = Field(default="all-MiniLM-L6-v2", validation_alias="VIGIL_EMBED_MODEL")
     # Force the deterministic hashing embedder (offline / tests); skips the ML model entirely.

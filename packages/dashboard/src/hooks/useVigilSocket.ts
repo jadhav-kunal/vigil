@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ConnState, ServerMessage, Step, Thresholds } from "../types";
+import type { BreakerInfo, ConnState, ServerMessage, Step, Thresholds } from "../types";
 
 const DEFAULT_THRESHOLDS: Thresholds = {
   theta_sim: 0.85,
@@ -21,6 +21,7 @@ export interface SocketState {
   steps: Step[];
   priceTable: Record<string, [number, number]>;
   thresholds: Thresholds;
+  breakers: Record<string, BreakerInfo>;
 }
 
 const MAX_STEPS = 2000;
@@ -30,6 +31,7 @@ export function useVigilSocket(): SocketState {
   const [steps, setSteps] = useState<Step[]>([]);
   const [priceTable, setPriceTable] = useState<Record<string, [number, number]>>({});
   const [thresholds, setThresholds] = useState<Thresholds>(DEFAULT_THRESHOLDS);
+  const [breakers, setBreakers] = useState<Record<string, BreakerInfo>>({});
   const retry = useRef<number>(0);
   // Dedupe across reconnects: the server replays its snapshot on every (re)connect, so a step
   // already seen must not be appended again (which would double session/aggregate cost).
@@ -70,6 +72,31 @@ export function useVigilSocket(): SocketState {
             const next = [...prev, msg.step];
             return next.length > MAX_STEPS ? next.slice(next.length - MAX_STEPS) : next;
           });
+          // A step also carries the current breaker state for its session.
+          if (msg.step.breaker_state) {
+            setBreakers((prev) => {
+              const existing = prev[msg.step.session_id];
+              return {
+                ...prev,
+                [msg.step.session_id]: {
+                  state: msg.step.breaker_state as BreakerInfo["state"],
+                  savedEstimate: existing?.savedEstimate ?? 0,
+                  tripStepIndex: existing?.tripStepIndex ?? null,
+                  postMortem: existing?.postMortem ?? null,
+                },
+              };
+            });
+          }
+        } else if (msg.type === "breaker") {
+          setBreakers((prev) => ({
+            ...prev,
+            [msg.session_id]: {
+              state: msg.state,
+              savedEstimate: msg.saved_estimate_usd,
+              tripStepIndex: msg.trip_step_index,
+              postMortem: msg.post_mortem,
+            },
+          }));
         }
       };
 
@@ -93,5 +120,5 @@ export function useVigilSocket(): SocketState {
     };
   }, []);
 
-  return { conn, steps, priceTable, thresholds };
+  return { conn, steps, priceTable, thresholds, breakers };
 }

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import abc
 import json
+from datetime import UTC
 from typing import Any
 
 import aiosqlite
@@ -73,6 +74,17 @@ class Store(abc.ABC):
     async def list_sessions(self) -> list[str]: ...
 
     @abc.abstractmethod
+    async def update_breaker_fields(
+        self, session_id: str, step_index: int, breaker_state: str | None, breaker_override: bool
+    ) -> None: ...
+
+    @abc.abstractmethod
+    async def get_breaker(self, session_id: str) -> dict | None: ...
+
+    @abc.abstractmethod
+    async def set_breaker(self, session_id: str, data: dict) -> None: ...
+
+    @abc.abstractmethod
     async def close(self) -> None: ...
 
 
@@ -96,6 +108,10 @@ class SQLiteStore(Store):
         await self._db.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_session "
             "ON steps(session_id, step_index);"
+        )
+        await self._db.execute(
+            "CREATE TABLE IF NOT EXISTS breaker_states ("
+            "session_id TEXT PRIMARY KEY, data TEXT, updated_at TEXT);"
         )
         await self._db.commit()
         log_event(logger, 20, "store.init", backend="sqlite", path=self._db_path)
@@ -181,6 +197,42 @@ class SQLiteStore(Store):
         assert self._db is not None
         cur = await self._db.execute("SELECT DISTINCT session_id FROM steps ORDER BY session_id;")
         return [row["session_id"] for row in await cur.fetchall()]
+
+    async def update_breaker_fields(
+        self, session_id: str, step_index: int, breaker_state: str | None, breaker_override: bool
+    ) -> None:
+        """Write the breaker state onto an already-persisted step row (the breaker verdict is
+        computed after the step's index is assigned)."""
+        assert self._db is not None
+        await self._db.execute(
+            "UPDATE steps SET breaker_state = ?, breaker_override = ? "
+            "WHERE session_id = ? AND step_index = ?;",
+            (breaker_state, int(breaker_override), session_id, step_index),
+        )
+        await self._db.commit()
+
+    async def get_breaker(self, session_id: str) -> dict | None:
+        assert self._db is not None
+        cur = await self._db.execute(
+            "SELECT data FROM breaker_states WHERE session_id = ?;", (session_id,)
+        )
+        row = await cur.fetchone()
+        if row is None or row["data"] is None:
+            return None
+        parsed = json.loads(row["data"])
+        return parsed if isinstance(parsed, dict) else None
+
+    async def set_breaker(self, session_id: str, data: dict) -> None:
+        assert self._db is not None
+        from datetime import datetime
+
+        await self._db.execute(
+            "INSERT INTO breaker_states (session_id, data, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET data = excluded.data, "
+            "updated_at = excluded.updated_at;",
+            (session_id, json.dumps(data), datetime.now(UTC).isoformat()),
+        )
+        await self._db.commit()
 
     async def close(self) -> None:
         if self._db is not None:

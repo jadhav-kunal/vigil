@@ -5,15 +5,28 @@ from fastapi.testclient import TestClient
 
 from vigil_proxy.analyzer import Analyzer
 from vigil_proxy.app import CaptureCtx, _capture, app
+from vigil_proxy.breaker_manager import BreakerManager
 from vigil_proxy.embedder import HashingEmbedder
 from vigil_proxy.hub import Broadcaster
 from vigil_proxy.normalize import normalize_openai_request
 from vigil_proxy.pricing import DEFAULT_PRICE_TABLE
+from vigil_proxy.settings import Settings
 from vigil_proxy.store import SQLiteStore
 
 
 def _test_analyzer():
     return Analyzer(HashingEmbedder(), window=5, trip_streak=3, theta_sim=0.85, theta_ent=0.30)
+
+
+def _test_breaker(store, broadcaster, analyzer):
+    return BreakerManager(
+        store=store,
+        broadcaster=broadcaster,
+        price_table=DEFAULT_PRICE_TABLE,
+        settings=Settings(),
+        judge=None,
+        analyzer=analyzer,
+    )
 
 
 def test_health():
@@ -55,11 +68,14 @@ async def test_capture_persists_and_broadcasts_step(tmp_path):
         async def broadcast(self, message):
             sent.append(message)
 
+    analyzer = _test_analyzer()
+    broadcaster = FakeBroadcaster()
     ctx = CaptureCtx(
         store=store,
-        broadcaster=FakeBroadcaster(),
+        broadcaster=broadcaster,
         price_table=DEFAULT_PRICE_TABLE,
-        analyzer=_test_analyzer(),
+        analyzer=analyzer,
+        breaker=_test_breaker(store, broadcaster, analyzer),
     )
     req = normalize_openai_request({"model": "gpt-4o", "messages": []})
     resp = {
@@ -98,6 +114,17 @@ def test_session_metrics_endpoint():
         assert m["session_id"] == "m1"
         assert m["steps"] >= 1
         assert m["cost_usd"] > 0
+
+
+def test_override_endpoint_resets_breaker():
+    with TestClient(app) as client:
+        r = client.post("/sessions/any-session/override")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["state"] == "CLOSED" and body["override"] is True
+        # Status endpoint reflects the reset.
+        s = client.get("/sessions/any-session/breaker").json()
+        assert s["state"] == "CLOSED"
 
 
 def test_ws_hello_and_live_step():

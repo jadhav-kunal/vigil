@@ -35,6 +35,15 @@ export interface Thresholds {
   trip_streak: number;
 }
 
+export type BreakerState = "CLOSED" | "HALF_OPEN" | "OPEN";
+
+export interface BreakerInfo {
+  state: BreakerState;
+  savedEstimate: number;
+  tripStepIndex: number | null;
+  postMortem: Record<string, unknown> | null;
+}
+
 export type ServerMessage =
   | {
       type: "hello";
@@ -42,7 +51,16 @@ export type ServerMessage =
       thresholds: Thresholds;
     }
   | { type: "snapshot"; count: number }
-  | { type: "step"; step: Step };
+  | { type: "step"; step: Step }
+  | {
+      type: "breaker";
+      session_id: string;
+      state: BreakerState;
+      transition: string;
+      trip_step_index: number | null;
+      saved_estimate_usd: number;
+      post_mortem: Record<string, unknown> | null;
+    };
 
 export interface SessionAgg {
   id: string;

@@ -37,7 +37,7 @@ function aggregate(steps: Step[]): SessionAgg[] {
 }
 
 export default function App() {
-  const { conn, steps, thresholds } = useVigilSocket();
+  const { conn, steps, thresholds, breakers } = useVigilSocket();
   const sessions = useMemo(() => aggregate(steps), [steps]);
 
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
@@ -67,9 +67,11 @@ export default function App() {
     return { cost, tokens };
   }, [steps]);
 
+  const currentBreaker = selectedSession ? (breakers[selectedSession] ?? null) : null;
+
   return (
     <div className="h-full flex flex-col" style={{ background: "var(--bg)" }}>
-      <TopBar conn={conn} totalCost={current?.cost ?? 0} />
+      <TopBar conn={conn} totalCost={current?.cost ?? 0} breaker={currentBreaker} />
 
       <div className="grid grid-cols-4 gap-3 px-6 pt-4">
         <div className="col-span-3">
