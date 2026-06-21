@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+/* Vigil instrument panel — dark, minimal, Linear/Vercel execution.
+   One accent, restrained palette, monospace for all numeric/meta data, flat 1px borders,
+   crisp radii, near-zero shadows. No gradients, no neon, no emoji. */
+
+:root {
+  --bg: #0a0a0b;
+  --surface: #111113;
+  --surface-2: #17171b;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --text: #e7e7ea;
+  --text-dim: #8b8b94;
+  --text-faint: #5b5b63;
+  --accent: #6b8afd;
+  --ok: #3ecf8e;
+  --warn: #e5b567;
+  --danger: #e5484d;
+
+  --font-sans: "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Geist Mono", ui-monospace, "Menlo", monospace;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "tnum" 1;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.divide-row + .divide-row {
+  border-top: 1px solid var(--border);
+}
+
+/* Functional motion only: a soft pulse for live/transition cues. */
+@keyframes vigil-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.pulse {
+  animation: vigil-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes vigil-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.fade-in {
+  animation: vigil-fade-in 0.18s ease-out;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

@@ -1,0 +1,38 @@
+export interface Step {
+  session_id: string;
+  step_index: number;
+  model_requested: string;
+  model_used: string;
+  tool_name: string | null;
+  tool_args: Record<string, unknown> | null;
+  assistant_text: string;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  tokens_before_compression: number | null;
+  tokens_after_compression: number | null;
+  timestamp: string;
+  caused_state_mutation: boolean;
+  breaker_override: boolean;
+  breaker_state: string | null;
+  // Added by the server on the wire:
+  cost_usd: number;
+  input_rate_per_1k: number;
+  output_rate_per_1k: number;
+}
+
+export type ServerMessage =
+  | { type: "hello"; price_table: Record<string, [number, number]> }
+  | { type: "snapshot"; count: number }
+  | { type: "step"; step: Step };
+
+export interface SessionAgg {
+  id: string;
+  steps: Step[];
+  cost: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  lastTs: string;
+  models: Set<string>;
+}
+
+export type ConnState = "connecting" | "open" | "closed";

@@ -43,6 +43,7 @@ eval/*.csv
 node_modules/
 packages/dashboard/dist/
 packages/dashboard/.vite/
+vite.config.ts.timestamp-*.mjs
 *.log
 .DS_Store
 

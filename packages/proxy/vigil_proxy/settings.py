@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     )
     upstream_timeout_s: float = Field(default=120.0, validation_alias="VIGIL_UPSTREAM_TIMEOUT")
     log_level: str = Field(default="INFO", validation_alias="VIGIL_LOG_LEVEL")
+    price_table_path: str | None = Field(default=None, validation_alias="VIGIL_PRICE_TABLE")
 
     # --- Store ---
     db_path: str = Field(default="vigil.db", validation_alias="VIGIL_DB_PATH")

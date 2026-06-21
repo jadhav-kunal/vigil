@@ -87,6 +87,20 @@ async def test_list_sessions(store):
     assert await store.list_sessions() == ["a", "b"]
 
 
+async def test_recent_steps_bounded_and_chronological(store):
+    for sid in ("a", "b"):
+        for _ in range(3):
+            await store.append_step(
+                Step(session_id=sid, step_index=0, model_requested="m", model_used="m")
+            )
+    # Inserted in order: a:0, a:1, a:2, b:0, b:1, b:2 (ids 1..6).
+    recent = await store.recent_steps(4)
+    assert len(recent) == 4  # capped at limit
+    # Returned in chronological (insertion) order: the last 4 inserts.
+    ids = [(s.session_id, s.step_index) for s in recent]
+    assert ids == [("a", 2), ("b", 0), ("b", 1), ("b", 2)]
+
+
 async def test_migration_is_idempotent(tmp_path):
     path = str(tmp_path / "mig.db")
     s1 = SQLiteStore(path)

@@ -60,6 +60,9 @@ class Store(abc.ABC):
     async def get_steps(self, session_id: str) -> list[Step]: ...
 
     @abc.abstractmethod
+    async def recent_steps(self, limit: int) -> list[Step]: ...
+
+    @abc.abstractmethod
     async def list_sessions(self) -> list[str]: ...
 
     @abc.abstractmethod
@@ -192,6 +195,16 @@ class SQLiteStore(Store):
             (session_id,),
         )
         return [_row_to_step(row) for row in await cur.fetchall()]
+
+    async def recent_steps(self, limit: int) -> list[Step]:
+        """Most recent `limit` steps across all sessions, in chronological order.
+
+        A single bounded query so dashboard snapshots never load the full history into memory.
+        """
+        assert self._db is not None
+        cur = await self._db.execute("SELECT * FROM steps ORDER BY id DESC LIMIT ?;", (limit,))
+        rows = list(await cur.fetchall())
+        return [_row_to_step(row) for row in reversed(rows)]
 
     async def list_sessions(self) -> list[str]:
         assert self._db is not None
