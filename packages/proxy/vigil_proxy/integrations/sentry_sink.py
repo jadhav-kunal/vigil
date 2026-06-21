@@ -26,6 +26,9 @@ class SentrySink:
             self._sdk.capture_message(
                 f"Vigil breaker OPEN — semantic loop halted (session {session_id})", level="error"
             )
+            # Flush so the event is delivered even if the process is short-lived (serverless) or
+            # is torn down right after the halt. A breaker OPEN is rare, so the brief wait is fine.
+            self._sdk.flush(timeout=3.0)
             log_event(logger, 20, "sentry.captured", session=session_id)
         except Exception as exc:  # best-effort; never break the breaker path
             log_event(logger, 30, "sentry.error", error=str(exc))

@@ -60,14 +60,35 @@ async def test_l2_failure_returns_input_unchanged():
 # --------------------------------------------------------------------------- Sentry
 
 
+def _sentry_sdk_installed() -> bool:
+    import importlib.util
+
+    return importlib.util.find_spec("sentry_sdk") is not None
+
+
 def test_sentry_disabled_without_dsn():
     assert make_sentry(Settings()) is None
 
 
+@pytest.mark.skipif(_sentry_sdk_installed(), reason="exercises the SDK-absent path only")
 def test_sentry_dsn_set_but_sdk_missing_degrades_to_none():
     s = Settings()
     s.sentry_dsn = "https://example@sentry.io/123"
     assert make_sentry(s) is None  # sentry_sdk not installed -> graceful no-op, not a crash
+
+
+@pytest.mark.skipif(not _sentry_sdk_installed(), reason="needs the [sentry] extra installed")
+def test_sentry_enabled_when_dsn_set_and_sdk_present(monkeypatch):
+    import sentry_sdk
+
+    captured = {}
+    # Stub init so the test never spins up a real Sentry client (no global state, no atexit flush).
+    monkeypatch.setattr(sentry_sdk, "init", lambda **kw: captured.update(kw))
+    s = Settings()
+    s.sentry_dsn = "https://example@sentry.io/123"
+    sink = make_sentry(s)
+    assert isinstance(sink, SentrySink)
+    assert captured["dsn"] == s.sentry_dsn
 
 
 def test_sentry_sink_captures_breaker_open():
@@ -81,6 +102,9 @@ def test_sentry_sink_captures_breaker_open():
 
         def capture_message(self, msg, level):
             self.messages.append((msg, level))
+
+        def flush(self, timeout=None):
+            self.flushed = True
 
     sdk = FakeSdk()
     SentrySink(sdk).capture_breaker_open("sess-1", {"reason": "loop"})
