@@ -67,6 +67,13 @@ class Settings(BaseSettings):
     judge_api_key: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_API_KEY")
     judge_model: str | None = Field(default=None, validation_alias="VIGIL_JUDGE_MODEL")
 
+    # --- Effort governor (spec 4.6): opt-in per-step model routing ---
+    governor_enabled: bool = Field(default=False, validation_alias="VIGIL_GOVERNOR_ENABLED")
+    # Optional JSON override of the provider -> tier -> model routing map.
+    governor_model_map: str | None = Field(
+        default=None, validation_alias="VIGIL_GOVERNOR_MODEL_MAP"
+    )
+
     # --- Compression Layer 1 (spec 4.5): always-on, free, structural ---
     compress_enabled: bool = Field(default=True, validation_alias="VIGIL_COMPRESS_ENABLED")
     compress_min_tool_bytes: int = Field(

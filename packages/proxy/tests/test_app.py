@@ -176,6 +176,39 @@ def test_compression_collapses_loop_on_the_wire_and_records_savings():
         assert m["tokens_saved"] > 0
 
 
+def test_governor_routes_extraction_to_cheaper_model_on_the_wire():
+    """Slice 6: with the governor enabled, an EXTRACTION step has its model rewritten to a cheaper
+    one BEFORE forwarding, and the step records the routed model_used."""
+    forwarded: dict = {}
+    upstream = {
+        "choices": [{"message": {"content": "ok"}}],
+        "usage": {"prompt_tokens": 20, "completion_tokens": 2},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forwarded["body"] = json.loads(request.content)
+        return httpx.Response(200, json=upstream)
+
+    with TestClient(app) as client:
+        app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        app.state.settings.governor_enabled = True
+        try:
+            r = client.post(
+                "/v1/chat/completions",
+                headers={"authorization": "Bearer k", "x-vigil-session-id": "gov1"},
+                json={
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "extract the totals from the report"}],
+                },
+            )
+            assert r.json() == upstream  # agent still gets the upstream response verbatim
+            assert forwarded["body"]["model"] == "gpt-4o-mini"  # routed down before forwarding
+            m = client.get("/metrics/session/gov1").json()
+            assert m["models_used"] == ["gpt-4o-mini"]  # model_used reflects the routed model
+        finally:
+            app.state.settings.governor_enabled = False  # don't leak the toggle to other tests
+
+
 def test_override_endpoint_resets_breaker():
     with TestClient(app) as client:
         r = client.post("/sessions/any-session/override")

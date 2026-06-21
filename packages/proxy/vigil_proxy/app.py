@@ -26,6 +26,7 @@ from .breaker import is_mitigating, is_open
 from .breaker_manager import BreakerManager, make_breaker
 from .compressor import compress_messages
 from .embedder import make_embedder
+from .governor import Governor, make_governor
 from .hub import Broadcaster, step_event
 from .judge import make_judge
 from .logging_config import get_logger, log_event, set_level
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.broadcaster = Broadcaster()
     app.state.price_table = load_price_table(settings)
     app.state.analyzer = make_analyzer(settings, make_embedder(settings))
+    app.state.governor = make_governor(settings, app.state.price_table)
     app.state.breaker = make_breaker(
         settings,
         app.state.store,
@@ -261,6 +263,32 @@ def _apply_mitigations(parsed: dict, provider: str, settings: Settings) -> tuple
     return parsed, downgrade
 
 
+def _route_request(
+    parsed: dict, provider: str, ctx: CaptureCtx, governor: Governor, session_id: str
+) -> tuple[dict, bool]:
+    """Effort governor (spec 4.6): classify the step and route to a cheaper model when warranted.
+    Returns the (possibly model-rewritten) body and whether it was rewritten. Only ever downgrades
+    (the governor's no-upgrade guard), so `model_used` here is always <= the requested cost."""
+    requested = parsed.get("model")
+    decision = governor.decide(session_id, provider, parsed)
+    if not decision.routed:
+        return parsed, False
+    parsed = dict(parsed)
+    parsed["model"] = decision.model
+    ctx.model_used = decision.model
+    log_event(
+        logger,
+        20,
+        "governor.route",
+        session=session_id,
+        effort=decision.effort_class,
+        requested=requested,
+        routed_to=decision.model,
+        escalated=decision.escalated,
+    )
+    return parsed, True
+
+
 def _compress_request(parsed: dict, ctx: CaptureCtx, settings: Settings, session_id: str) -> bool:
     """Layer 1 compression (spec 4.5) on the request path. Records before/after token estimates
     (the same-estimator savings proof) on ctx, and returns True if the body was rewritten."""
@@ -358,9 +386,15 @@ async def _proxy(request: Request, *, provider: str) -> Response:
         )
     rewritten = False
     if is_mitigating(snap.state):
+        # Breaker mitigation owns the model while HALF_OPEN; the governor stays out of its way.
         parsed, ctx.model_used = _apply_mitigations(parsed, provider, settings)
         rewritten = True
         log_event(logger, 20, "breaker.mitigate", session=session_id, downgraded_to=ctx.model_used)
+    elif settings.governor_enabled:
+        parsed, routed = _route_request(
+            parsed, provider, ctx, request.app.state.governor, session_id
+        )
+        rewritten = routed or rewritten
 
     rewritten = _compress_request(parsed, ctx, settings, session_id) or rewritten
     if rewritten:
