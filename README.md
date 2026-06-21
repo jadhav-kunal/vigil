@@ -33,6 +33,123 @@ curl localhost:8765/health      # -> {"status":"ok"}
 Your agent behaves identically — except Vigil now watches every step, and when the trajectory
 degenerates it acts.
 
+## Run it locally — step by step
+
+**Prerequisites:** Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) for the proxy; Node 18+
+for the dashboard (optional). No Redis, no cloud account, no extra keys.
+
+### 1. Install the proxy
+
+```bash
+cd vigil
+uv sync                 # creates .venv and installs the proxy + deps
+cp .env.example .env     # optional — the defaults already target OpenAI
+```
+
+### 2. Start the proxy
+
+```bash
+uv run uvicorn vigil_proxy.app:app --host 0.0.0.0 --port 8765
+curl localhost:8765/health        # -> {"status":"ok"}
+```
+
+> First start downloads the embedding model `all-MiniLM-L6-v2` (~90 MB, one time). To skip it
+> for a quick spin (uses a deterministic hashing embedder instead), prefix the command with
+> `VIGIL_EMBED_HASHING=true`.
+
+By default the proxy forwards to OpenAI (`OPENAI_BASE_URL=https://api.openai.com/v1`). Point it
+anywhere OpenAI-compatible by editing `.env`.
+
+### 3. Send traffic through it
+
+Either change your client's `base_url` (the quickstart above), or test directly with curl:
+
+```bash
+curl localhost:8765/v1/chat/completions \
+  -H "authorization: Bearer $OPENAI_API_KEY" \
+  -H "x-vigil-session-id: demo" \
+  -H "content-type: application/json" \
+  -d '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"hello"}]}'
+```
+
+The optional `x-vigil-session-id` header groups requests into one trajectory (any string; one is
+auto-generated if omitted). Your provider key is passed straight through in `Authorization` and
+is **never stored**.
+
+### 4. Watch it live — the dashboard (optional)
+
+```bash
+cd packages/dashboard
+npm install
+npm run dev                       # http://localhost:5173
+```
+
+It connects to the proxy's WebSocket at `ws://localhost:8765/ws` and streams every step — cost
+meter, similarity/entropy charts, breaker state, per-step model and token counts. (If the proxy
+isn't on `localhost`, set `VITE_VIGIL_WS=ws://host:8765/ws` before `npm run dev`.)
+
+### 5. Inspect and act on a session
+
+```bash
+curl localhost:8765/metrics/session/demo              # steps, tokens, tokens_saved, cost
+curl localhost:8765/sessions/demo/breaker             # breaker state + post-mortem
+curl -X POST localhost:8765/sessions/demo/replay      # cached-trace replay (zero upstream calls)
+curl -X POST localhost:8765/sessions/demo/fork \
+  -H "content-type: application/json" -H "authorization: Bearer $OPENAI_API_KEY" \
+  -d '{"step_index":0,"model":"gpt-4o-mini"}'          # counterfactual model fork (one call)
+curl -X POST localhost:8765/sessions/demo/override    # reset a tripped breaker to CLOSED
+```
+
+### 6. See a loop get caught (no API key needed)
+
+The deterministic benchmark drives scripted looping / healthy / normal trajectories through the
+**real** watchdog, breaker, compressor and governor — proving the breaker trips on loops, stays
+quiet on healthy work, and quantifying the savings:
+
+```bash
+uv pip install -e ".[eval]"       # matplotlib + scipy (plots + stats)
+uv run python -m eval.benchmark --seeds 20
+ls eval/out/                       # savings_table.md, ablation.md, net_savings.md, *.png, ...
+```
+
+### 7. Run the tests
+
+```bash
+uv run pytest -q                   # full suite (proxy + eval)
+# full quality gate, as run before every commit:
+uv run ruff check packages/proxy eval && uv run black --check packages/proxy eval \
+  && uv run mypy && uv run pytest -q
+```
+
+## Endpoints
+
+| Method & path | What it does |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI-compatible proxy (streaming + non-streaming) |
+| `POST /v1/messages` | Anthropic-compatible proxy |
+| `GET /health` | Liveness check |
+| `GET /metrics/session/{id}` | Per-session steps, tokens, compression savings, cost |
+| `GET /sessions/{id}/breaker` | Breaker state, trip step, post-mortem |
+| `POST /sessions/{id}/override` | Reset a tripped breaker to CLOSED |
+| `POST /sessions/{id}/replay` | Cached-trace replay — rebuilds the trajectory, zero upstream calls |
+| `POST /sessions/{id}/fork` | Re-run one step with a swapped model; diffs reasoning vs tool output |
+| `WS /ws` | Live step/cost/breaker stream for the dashboard |
+
+## Configuration
+
+Everything is configured through environment variables (see `.env.example` for the full,
+commented list). The defaults boot a fully working local proxy. The notable toggles:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `OPENAI_BASE_URL` | OpenAI | Upstream the proxy forwards to |
+| `VIGIL_COMPRESS_ENABLED` | `true` | Layer-1 loop-aware context compression (free, structural) |
+| `VIGIL_GOVERNOR_ENABLED` | `false` | Per-step model routing to the cheapest adequate model |
+| `VIGIL_FORENSICS_ENABLED` | `true` | Cache exchanges for replay/fork |
+| `VIGIL_EMBED_HASHING` | `false` | Use the offline hashing embedder (skip the ML model download) |
+| `VIGIL_WINDOW` / `VIGIL_TRIP_STREAK` / `VIGIL_THETA_SIM` / `VIGIL_THETA_ENT` | `5 / 3 / 0.85 / 0.30` | Watchdog detection thresholds |
+| `VIGIL_JUDGE_*` | unset | Optional LLM goal-judge (degrades to cosine+entropy if absent) |
+
 ## What it does (plainly)
 
 - **Watches** every request/response as a step in a trajectory.
@@ -64,12 +181,7 @@ degenerates it acts.
 
 The savings claims are backed by a deterministic, offline benchmark (no network, no real LLM —
 a scripted mock upstream replays labeled trajectories, so the whole thing is reproducible from a
-seed):
-
-```bash
-pip install -e ".[eval]"          # matplotlib + scipy for plots and stats
-python -m eval.benchmark --seeds 20
-```
+seed). Run it with the commands in [step 6](#6-see-a-loop-get-caught-no-api-key-needed) above.
 
 It runs an **ablation ladder** (C0 control → each mechanism alone → full Vigil) over three
 datasets — looping sessions (must trip), healthy-repetitive sessions (must **not** trip), and
@@ -90,4 +202,7 @@ capability is silently skipped.
 
 ## Status
 
-Early development. See the build slices in the project plan.
+Active development. Working today: the pass-through proxy + step capture, the live dashboard, the
+semantic watchdog, the circuit breaker, loop-aware compression, the effort governor, the
+deterministic evaluation harness, and cached-trace replay + fork. Next up: env-gated sponsor
+integrations, aggregate metrics + a one-command CLI demo, and an optional Redis backend.
