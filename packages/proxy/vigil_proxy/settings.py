@@ -29,6 +29,17 @@ class Settings(BaseSettings):
         default="https://api.anthropic.com", validation_alias="ANTHROPIC_BASE_URL"
     )
     upstream_timeout_s: float = Field(default=120.0, validation_alias="VIGIL_UPSTREAM_TIMEOUT")
+    # Per-request provider routing: when on, a caller may set the `x-vigil-upstream` header to
+    # forward THIS request to a different upstream base URL. Off by default — an arbitrary upstream
+    # is an SSRF risk, so opt in and (recommended) constrain it with the allowlist below.
+    allow_upstream_header: bool = Field(
+        default=False, validation_alias="VIGIL_ALLOW_UPSTREAM_HEADER"
+    )
+    # Comma-separated allowed upstream URL prefixes (e.g. "https://api.openai.com,https://openrouter.ai/api").
+    # Empty => any URL is allowed when the header is enabled (not recommended in production).
+    upstream_allowlist: str | None = Field(
+        default=None, validation_alias="VIGIL_UPSTREAM_ALLOWLIST"
+    )
     log_level: str = Field(default="INFO", validation_alias="VIGIL_LOG_LEVEL")
     price_table_path: str | None = Field(default=None, validation_alias="VIGIL_PRICE_TABLE")
 

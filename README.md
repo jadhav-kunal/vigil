@@ -143,7 +143,8 @@ commented list). The defaults boot a fully working local proxy. The notable togg
 
 | Variable | Default | Effect |
 |---|---|---|
-| `OPENAI_BASE_URL` | OpenAI | Upstream the proxy forwards to |
+| `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` | OpenAI / Anthropic | Upstream the proxy forwards to (any OpenAI-compatible host) |
+| `VIGIL_ALLOW_UPSTREAM_HEADER` | `false` | Allow per-request routing via the `x-vigil-upstream` header (constrain with `VIGIL_UPSTREAM_ALLOWLIST`) |
 | `VIGIL_COMPRESS_ENABLED` | `true` | Layer-1 loop-aware context compression (free, structural) |
 | `VIGIL_GOVERNOR_ENABLED` | `false` | Per-step model routing to the cheapest adequate model |
 | `VIGIL_FORENSICS_ENABLED` | `true` | Cache exchanges for replay/fork |
@@ -151,6 +152,22 @@ commented list). The defaults boot a fully working local proxy. The notable togg
 | `VIGIL_EMBED_HASHING` | `false` | Use the offline hashing embedder (skip the ML model download) |
 | `VIGIL_WINDOW` / `VIGIL_TRIP_STREAK` / `VIGIL_THETA_SIM` / `VIGIL_THETA_ENT` | `5 / 3 / 0.85 / 0.30` | Watchdog detection thresholds |
 | `VIGIL_JUDGE_*` | unset | Optional LLM goal-judge (degrades to cosine+entropy if absent) |
+
+**Where the provider URL comes from:** Vigil forwards to the upstream set by `OPENAI_BASE_URL` /
+`ANTHROPIC_BASE_URL` (the request only carries the *key*, in `Authorization`, passed through and
+never stored). Point those at any OpenAI-compatible host (Azure, OpenRouter, vLLM, …). For
+**per-request** routing, enable `VIGIL_ALLOW_UPSTREAM_HEADER=true` and send a header:
+
+```bash
+curl http://localhost:8765/v1/chat/completions \
+  -H "authorization: Bearer $KEY" \
+  -H "x-vigil-upstream: https://openrouter.ai/api/v1" \
+  -H "content-type: application/json" \
+  -d '{"model":"...","messages":[...]}'
+```
+
+Constrain it with `VIGIL_UPSTREAM_ALLOWLIST` (comma-separated URL prefixes) — an unconstrained
+upstream is an SSRF risk. The `x-vigil-*` control headers are stripped before forwarding.
 
 ## CLI
 

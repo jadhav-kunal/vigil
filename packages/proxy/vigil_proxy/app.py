@@ -349,7 +349,41 @@ def _state_mutation_override(request: Request) -> bool | None:
 
 
 def _forward_headers(request: Request) -> dict[str, str]:
-    return {k: v for k, v in request.headers.items() if k.lower() not in _DROP_REQUEST_HEADERS}
+    # Drop hop-by-hop/length headers and Vigil's own control headers (x-vigil-*) so they never
+    # leak to the provider.
+    return {
+        k: v
+        for k, v in request.headers.items()
+        if k.lower() not in _DROP_REQUEST_HEADERS and not k.lower().startswith("x-vigil-")
+    }
+
+
+def _upstream_allowed(base: str, settings: Settings) -> bool:
+    if not (base.startswith("http://") or base.startswith("https://")):
+        return False
+    allow = settings.upstream_allowlist
+    if not allow:
+        return True  # header enabled but no allowlist => any URL (documented SSRF caveat)
+    prefixes = [p.strip().rstrip("/") for p in allow.split(",") if p.strip()]
+    return any(base.rstrip("/").startswith(p) for p in prefixes)
+
+
+def _resolve_upstream(request: Request, provider: str, settings: Settings) -> str:
+    """The full upstream URL for this request. Honors the per-request `x-vigil-upstream` override
+    when enabled and allowed; otherwise uses the configured per-provider base."""
+    default_base = (
+        settings.anthropic_base_url if provider == "anthropic" else settings.openai_base_url
+    )
+    base = default_base
+    override = request.headers.get("x-vigil-upstream")
+    if override and settings.allow_upstream_header:
+        if _upstream_allowed(override, settings):
+            base = override
+            log_event(logger, 20, "upstream.override", provider=provider, base=override)
+        else:
+            log_event(logger, 30, "upstream.override_rejected", base=override)
+    base = base.rstrip("/")
+    return f"{base}/v1/messages" if provider == "anthropic" else f"{base}/chat/completions"
 
 
 def _cache_prompt(messages: list[dict]) -> str:
@@ -507,12 +541,9 @@ async def _proxy(request: Request, *, provider: str) -> Response:
 
     if provider == "anthropic":
         req = normalize_anthropic_request(parsed)
-        base = settings.anthropic_base_url.rstrip("/")
-        url = f"{base}/v1/messages"
     else:
         req = normalize_openai_request(parsed)
-        base = settings.openai_base_url.rstrip("/")
-        url = f"{base}/chat/completions"
+    url = _resolve_upstream(request, provider, settings)
 
     session_id = _session_id(request)
     mutation_override = _state_mutation_override(request)
